@@ -23,6 +23,11 @@ SOFTWARE.*/
 package java.lang;
 
 public class Object {
-    public Object() {        
+    public Object() {}
+    public boolean equals(Object obj) {
+        return this == obj; // Comparación de punteros nativa
+    }
+    public int hashCode() {
+        return 0; // Hasta que implemente punteros de memoria dinámicos, se queda así
     }
 }
