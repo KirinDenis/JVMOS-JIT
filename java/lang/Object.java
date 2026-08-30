@@ -28,6 +28,10 @@ public class Object {
         return this == obj; // Comparación de punteros nativa
     }
     public int hashCode() {
-        return 0; // Hasta que implemente punteros de memoria dinámicos, se queda así
+        int h = 0;
+        for (int i = 0; i < length(); i++) {
+            h = 31 * h + value[i];
+        }
+        return h;
     }
 }
