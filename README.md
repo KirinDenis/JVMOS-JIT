@@ -15,6 +15,13 @@ It is an improved fork of the repository: https://github.com/aayes89/JVMOS.
 * run <code>clear && make clean && make run</code><br>
 <b>Note:</b> I shared a 10MB image pre-configured for QEMU so you won't have any issues starting it up, but you can run `kernel.bin` if you'd like to test without a hard drive.
 
+# TODO
+* Test useful apps (Notepad, Paint, Calculator)
+* Sound support
+* Network support
+* Improve actual filesystem
+* (FAT/FAT32, NTFS, etc.) support
+
 # Screenshots
 <img width="1024" height="834" alt="imagen" src="https://github.com/user-attachments/assets/431dbd24-4842-4d5b-98a3-fe33ddc94120" />
 
