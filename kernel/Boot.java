@@ -35,6 +35,7 @@ public class Boot {
 
     private static Node root;
     private static Node currentDir;
+    private static Node selectedNode; // NUEVO: Para saber qué está marcado
 
     // ESTADO GLOBAL DEL ESCRITORIO (Sin inicializar aquí por falta de <clinit>)    
     private static int winX, winY, winW, winH;
@@ -117,6 +118,7 @@ public class Boot {
         isDragging = false; dragOffsetX = 0; dragOffsetY = 0;
         showStartMenu = false; showContextMenu = false; showAbout = false;
         contextX = 0; contextY = 0; backgroundMode = 0;
+        selectedNode = null; // Inicializar selección
 
         initFS();
         redrawScreen();
@@ -169,19 +171,21 @@ public class Boot {
             } else if (btn == 1 && lastBtn != 1) { // Clic Izquierdo
                 if (showContextMenu) {
                     if (mx >= contextX && mx <= contextX + 190) {
-                        if (my >= contextY + 5 && my <= contextY + 25) backgroundMode = 0;
-                        else if (my >= contextY + 25 && my <= contextY + 45) backgroundMode = 1;
-                        else if (my >= contextY + 45 && my <= contextY + 65) backgroundMode = 2;
-                        else if (my >= contextY + 65 && my <= contextY + 85) { windowOpen = true; windowMinimized = false; }
-                        else if (my >= contextY + 85 && my <= contextY + 105) showAbout = true;
+                        // Corrección de hitboxes del menú (Saltos de 20px alineados con drawString)
+                        if (my >= contextY + 15 && my <= contextY + 35) backgroundMode = 0;
+                        else if (my >= contextY + 35 && my <= contextY + 55) backgroundMode = 1;
+                        else if (my >= contextY + 55 && my <= contextY + 75) backgroundMode = 2;
+                        else if (my >= contextY + 75 && my <= contextY + 95) { windowOpen = true; windowMinimized = false; }
+                        else if (my >= contextY + 95 && my <= contextY + 115) showAbout = true;
                     }
                     showContextMenu = false; redrawScreen(); drawMouse(mx, my);
                 } else if (showStartMenu) {
-                    int menuY = 726 - 95;
+                    int menuY = 726 - 105;
                     if (mx >= 5 && mx <= 185 && my >= menuY && my <= 726) {
-                        if (my >= menuY && my < menuY + 30) { windowOpen = true; windowMinimized = false; }
-                        else if (my >= menuY + 30 && my < menuY + 60) { windowOpen = false; showAbout = false; }
-                        else if (my >= menuY + 60 && my <= 726) { clearScreen(); shutdown(); }
+                        // Corrección hitboxes Menú Inicio (Saltos de 30px)
+                        if (my >= menuY + 20 && my < menuY + 50) { windowOpen = true; windowMinimized = false; }
+                        else if (my >= menuY + 50 && my < menuY + 80) { windowOpen = false; showAbout = false; }
+                        else if (my >= menuY + 80 && my <= 726) { clearScreen(); shutdown(); }
                     }
                     showStartMenu = false; redrawScreen(); drawMouse(mx, my);
                 } else if (showAbout) {
@@ -200,29 +204,56 @@ public class Boot {
                     } else if (mx >= winX && mx <= winX + winW - 30 && my >= winY && my <= winY + 27) {
                         isDragging = true; dragOffsetX = mx - winX; dragOffsetY = my - winY;
                     } else if (mx >= winX + 10 && mx <= winX + 190 && my >= winY + 35 && my <= winY + winH - 45) {
+                        // HITBOX ÁRBOL IZQUIERDO CORREGIDO
                         int nodeY = winY + 55;
-                        if (my >= nodeY - 10 && my <= nodeY + 10) { currentDir = root; redrawScreen(); drawMouse(mx, my); }
+                        if (my >= nodeY - 5 && my <= nodeY + 15) { currentDir = root; selectedNode = null; redrawScreen(); drawMouse(mx, my); }
                         nodeY += 25;
                         for (int i = 0; i < root.childCount; i++) {
                             Node child = root.children[i];
                             if (child.isDir) {
-                                if (my >= nodeY - 10 && my <= nodeY + 10) { currentDir = child; redrawScreen(); drawMouse(mx, my); }
+                                if (my >= nodeY - 5 && my <= nodeY + 15) { currentDir = child; selectedNode = null; redrawScreen(); drawMouse(mx, my); }
                                 nodeY += 20;
                             }
                         }
                     } else if (mx >= winX + 195 && mx <= winX + winW - 10 && my >= winY + 35 && my <= winY + winH - 45) {
+                        // HITBOX VISTA PREVIA CORREGIDO
                         int iconX = winX + 215, iconY = winY + 55;
+                        boolean clickedSomething = false;
+                        
+                        // Opción de Retroceso ".."
                         if (currentDir.parent != null) {
-                            if (mx >= iconX && mx <= iconX + 60 && my >= iconY && my <= iconY + 50) { currentDir = currentDir.parent; redrawScreen(); drawMouse(mx, my); }
+                            if (mx >= iconX && mx <= iconX + 60 && my >= iconY && my <= iconY + 50) { 
+                                currentDir = currentDir.parent; selectedNode = null; redrawScreen(); drawMouse(mx, my); clickedSomething = true;
+                            }
                             iconX += 90;
                         }
-                        for (int i = 0; i < currentDir.childCount; i++) {
-                            Node child = currentDir.children[i];
-                            if (child != null && child.isDir) {
-                                if (mx >= iconX && mx <= iconX + 60 && my >= iconY && my <= iconY + 50) { currentDir = child; redrawScreen(); drawMouse(mx, my); }
-                                iconX += 90;
-                                if (iconX > winX + winW - 80) { iconX = winX + 215; iconY += 60; }
+                        
+                        // Iconos de la carpeta
+                        if (!clickedSomething) {
+                            for (int i = 0; i < currentDir.childCount; i++) {
+                                Node child = currentDir.children[i];
+                                if (child != null) {
+                                    if (mx >= iconX - 5 && mx <= iconX + 65 && my >= iconY - 5 && my <= iconY + 55) { 
+                                        if (child == selectedNode && child.isDir) {
+                                            // Doble Clic = Abrir
+                                            currentDir = child; selectedNode = null;
+                                        } else {
+                                            // Un Clic = Seleccionar
+                                            selectedNode = child;
+                                        }
+                                        redrawScreen(); drawMouse(mx, my);
+                                        clickedSomething = true;
+                                        break;
+                                    }
+                                    iconX += 90;
+                                    if (iconX > winX + winW - 80) { iconX = winX + 215; iconY += 60; }
+                                }
                             }
+                        }
+                        
+                        // Si clicó en el blanco, desmarcar selección
+                        if (!clickedSomething && selectedNode != null) {
+                            selectedNode = null; redrawScreen(); drawMouse(mx, my);
                         }
                     }
                 }
@@ -282,9 +313,9 @@ public class Boot {
     public static void drawWindow() {
         if (!windowOpen || windowMinimized) return;
         
-        setColor(0x00C0C0C0); fillRect(winX, winY, winW, winH);
-        setColor(0x00000080); fillRect(winX + 3, winY + 3, winW - 6, 24);
-        setColor(0x00FFFFFF); drawString(winX + 10, winY + 10, "JExplorer - "); drawString(winX + 130, winY + 10, currentDir.name); // Root (raiz)
+        setColor(0x00C0C0C0); fillRect(winX, winY, winW, winH); // Fondo base ventana
+        setColor(0x00000080); fillRect(winX + 3, winY + 3, winW - 6, 24); // Barra Título
+        setColor(0x00FFFFFF); drawString(winX + 10, winY + 10, "JExplorer - "); drawString(winX + 130, winY + 10, currentDir.name);
 
         int btnX = winX + winW - 23, btnY = winY + 5;
         setColor(0x00FF0000); fillRect(btnX, btnY, 18, 18);
@@ -293,39 +324,55 @@ public class Boot {
         int treeX = winX + 10, treeY = winY + 35, treeW = 180, treeH = winH - 45;
         int viewX = winX + 195, viewY = winY + 35, viewW = winW - 205, viewH = winH - 45;
 
-        setColor(0x00E0E0E0); fillRect(treeX, treeY, treeW, treeH);
-        setColor(0x00FFFFFF); fillRect(viewX, viewY, viewW, viewH);
+        // Limpieza de paneles a su color base exacto
+        setColor(0x00E0E0E0); fillRect(treeX, treeY, treeW, treeH); // Gris claro árbol
+        setColor(0x00FFFFFF); fillRect(viewX, viewY, viewW, viewH); // Blanco contenido
 
-        setColor(0x00000000); int nodeY = treeY + 20;
-        drawString(treeX + 10, nodeY, "[-] / (Root)"); nodeY += 25;
+        // DIBUJADO DE ÁRBOL IZQUIERDO CORREGIDO
+        int nodeY = treeY + 20;
+        
+        // Root Selección
+        if (currentDir == root) { setColor(0x00000080); fillRect(treeX + 5, nodeY - 3, 170, 18); setColor(0x00FFFFFF); }
+        else { setColor(0x00000000); }
+        drawString(treeX + 10, nodeY, "[-] / (Root)"); 
+        nodeY += 25;
 
         for (int i = 0; i < root.childCount; i++) {
             Node child = root.children[i];
             if (child.isDir) {
                 if (child == currentDir) {
-                    setColor(0x00000080); fillRect(treeX + 20, nodeY - 14, 150, 18); setColor(0x00FFFFFF);
-                } else setColor(0x00000000);
+                    setColor(0x00000080); fillRect(treeX + 15, nodeY - 3, 160, 18); setColor(0x00FFFFFF);
+                } else { 
+                    setColor(0x00000000); 
+                }
                 drawString(treeX + 25, nodeY, "+-- "); drawString(treeX + 55, nodeY, child.name);
                 nodeY += 20;
             }
         }
 
+        // DIBUJADO VISTA PREVIA CORREGIDA
         int iconX = viewX + 20, iconY = viewY + 20;
         if (currentDir.parent != null) {
             setColor(0x00808080); fillRect(iconX, iconY, 32, 22);
-            setColor(0x00000000); drawString(iconX, iconY + 38, ".. (Atras)");
+            setColor(0x00000000); drawString(iconX - 5, iconY + 38, ".. (Atras)"); // Texto centrado con icono
             iconX += 90;
         }
 
         for (int i = 0; i < currentDir.childCount; i++) {
             Node child = currentDir.children[i];
             if (child != null) {
+                // Marco de selección alineado
+                if (child == selectedNode) { setColor(0x00D0D0FF); fillRect(iconX - 5, iconY - 5, 80, 60); }
+
+                // Dibujar Icono
                 if (child.isDir) {
                     setColor(0x00F0C000); fillRect(iconX, iconY, 32, 22); fillRect(iconX, iconY - 4, 12, 4);
                 } else {
                     setColor(0x00A0A0A0); fillRect(iconX, iconY, 20, 26);
                 }
-                setColor(0x00000000); drawString(iconX, iconY + 38, child.name);
+                
+                // Texto de archivo
+                setColor(0x00000000); drawString(iconX - 5, iconY + 38, child.name); // Centrado con icono
 
                 iconX += 90;
                 if (iconX > viewX + viewW - 80) { iconX = viewX + 20; iconY += 60; }
@@ -340,30 +387,34 @@ public class Boot {
 
         setColor(showStartMenu ? 0x00808080 : 0x00008000);
         fillRect(5, taskbarY + 4, 80, 32);
-        setColor(0x00FFFFFF); drawString(22, taskbarY + 24, "INICIO");
+        setColor(0x00FFFFFF); drawString(22, taskbarY + 14, "INICIO");
 
         if (windowOpen) {
             setColor(windowMinimized ? 0x00A0A0A0 : 0x00E0E0E0);
             fillRect(95, taskbarY + 4, 140, 32);
-            setColor(0x00000000); drawString(110, taskbarY + 24, "JExplorer");
+            setColor(0x00000000); drawString(110, taskbarY + 14, "JExplorer");
         }
     }
 
     public static void drawStartMenu() {
         if (!showStartMenu) return;
-        int menuH = 95, menuY = 726 - menuH;
+        int menuH = 105, menuY = 726 - menuH;
         setColor(0x00C0C0C0); fillRect(5, menuY, 180, menuH);
-        setColor(0x00000080); fillRect(5, menuY, 25, menuH);
+        setColor(0x00000080); fillRect(5, menuY, 25, menuH); // Barra azul izquierda
         setColor(0x00000000);
+        
+        // Textos alineados con los nuevos hitboxes
         drawString(35, menuY + 25, "Abrir JExplorer");
         drawString(35, menuY + 55, "Cerrar Ventanas");
-        drawString(35, menuY + 82, "Apagar Equipo");
+        drawString(35, menuY + 85, "Apagar Equipo");
     }
 
     public static void drawContextMenu() {
         if (!showContextMenu) return;
-        setColor(0x00F0F0F0); fillRect(contextX, contextY, 190, 115);
-        setColor(0x00000000); drawRect(contextX, contextY, 190, 115);
+        setColor(0x00F0F0F0); fillRect(contextX, contextY, 190, 125);
+        setColor(0x00000000); drawRect(contextX, contextY, 190, 125);
+        
+        // Textos alineados para clic derecho
         drawString(contextX + 15, contextY + 20, "Fondo Solido");
         drawString(contextX + 15, contextY + 40, "Fondo Gradiente");
         drawString(contextX + 15, contextY + 60, "Fondo Fractal");
@@ -391,7 +442,7 @@ public class Boot {
         drawString(ax + 20, ay + 160, "Memoria RAM: 128 MB (Estatica BIOS)");
         drawString(ax + 20, ay + 180, "Video: VBE VESA 1024x768 @ 32bpp");
     }
-	
+    
     // RESTAURACIÓN LIGERA DEL RATÓN (Algoritmo del Pintor Rápido)
     public static void clearMouse(int x, int y) {
         if (backgroundMode == 0) {
@@ -425,11 +476,12 @@ public class Boot {
             }
         }
 
+        // Re-dibujado condicional por capa (z-index simulado)
         if (windowOpen && !windowMinimized && x < winX + winW && x + 14 > winX && y < winY + winH && y + 18 > winY) drawWindow();
         if (showAbout && x < 262 + 500 && x + 14 > 262 && y < 250 + 220 && y + 18 > 250) drawAboutWindow();
         if (y + 18 >= 726) drawTaskbar();
-        if (showStartMenu && x < 185 && y + 18 > 631) drawStartMenu();
-        if (showContextMenu && x < contextX + 190 && x + 14 > contextX && y < contextY + 115 && y + 18 > contextY) drawContextMenu();
+        if (showStartMenu && x < 185 && y + 18 > 621) drawStartMenu();
+        if (showContextMenu && x < contextX + 190 && x + 14 > contextX && y < contextY + 125 && y + 18 > contextY) drawContextMenu();
     }
 
     public static void drawMouse(int x, int y) {
@@ -459,6 +511,7 @@ public class Boot {
     public static int readMouseEvent(int p) { return Native.sys(Native.SYS_READ_MOUSE, p, 0, 0, 0); }
     public static int readKeyboardKey(int p) { return Native.sys(Native.SYS_READ_KEYBOARD, p, 0, 0, 0); }
     public static int readTime(int p) { return Native.sys(Native.SYS_GET_TIME, p, 0, 0, 0); }
+    public static int getSystemTicks() { return Native.sys(Native.SYS_GET_TICKS, 0, 0, 0, 0); }
     public static void setColor(int c) { Native.sys(Native.SYS_SET_COLOR, c, 0, 0, 0); }
     public static void drawString(int x, int y, String t) { Native.sys(Native.SYS_DRAW_STRING, x, y, t, 0); }
     public static void drawChar(int x, int y, int c) { Native.sys(Native.SYS_DRAW_CHAR, x, y, c, 0); }
