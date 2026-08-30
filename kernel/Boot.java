@@ -23,10 +23,8 @@ SOFTWARE.*/
 package kernel;
 
 public class Boot {
-
-    // =========================================================================
-    // 1. ESTRUCTURA DEL SISTEMA DE ARCHIVOS (VFS)
-    // =========================================================================
+    
+    // ESTRUCTURA DEL SISTEMA DE ARCHIVOS (VFS)    
     public static class Node {
         public String name;
         public boolean isDir;
@@ -38,9 +36,7 @@ public class Boot {
     private static Node root;
     private static Node currentDir;
 
-    // =========================================================================
-    // 2. ESTADO GLOBAL DEL ESCRITORIO (Sin inicializar aquí por falta de <clinit>)
-    // =========================================================================
+    // ESTADO GLOBAL DEL ESCRITORIO (Sin inicializar aquí por falta de <clinit>)    
     private static int winX, winY, winW, winH;
     private static boolean windowOpen;
     private static boolean windowMinimized;
@@ -113,9 +109,7 @@ public class Boot {
         }
     }
 
-    // =========================================================================
-    // 3. MOTOR GRÁFICO (ESCRITORIO, EXPLORADOR Y GESTOR DE EVENTOS)
-    // =========================================================================
+    // MOTOR GRÁFICO (ESCRITORIO, EXPLORADOR Y GESTOR DE EVENTOS)    
     public static void runStartX() {
         // Inicialización Explicita (Vital en Baremetal)
         winX = 150; winY = 60; winW = 720; winH = 460;
@@ -243,9 +237,7 @@ public class Boot {
         clearScreen();
     }
 
-    // =========================================================================
-    // 4. MÉTODOS DE DIBUJADO DE UI
-    // =========================================================================
+    // MÉTODOS DE DIBUJADO DE UI    
     public static void redrawScreen() {
         drawBackground();
         drawWindow();
@@ -292,11 +284,11 @@ public class Boot {
         
         setColor(0x00C0C0C0); fillRect(winX, winY, winW, winH);
         setColor(0x00000080); fillRect(winX + 3, winY + 3, winW - 6, 24);
-        setColor(0x00FFFFFF); drawString(winX + 10, winY + 20, "JExplorer - "); drawString(winX + 130, winY + 20, currentDir.name);
+        setColor(0x00FFFFFF); drawString(winX + 10, winY + 10, "JExplorer - "); drawString(winX + 130, winY + 10, currentDir.name); // Root (raiz)
 
         int btnX = winX + winW - 23, btnY = winY + 5;
         setColor(0x00FF0000); fillRect(btnX, btnY, 18, 18);
-        setColor(0x00FFFFFF); drawString(btnX + 5, btnY + 14, "X");
+        setColor(0x00FFFFFF); drawString(btnX + 5, btnY + 5, "X");
 
         int treeX = winX + 10, treeY = winY + 35, treeW = 180, treeH = winH - 45;
         int viewX = winX + 195, viewY = winY + 35, viewW = winW - 205, viewH = winH - 45;
@@ -400,9 +392,7 @@ public class Boot {
         drawString(ax + 20, ay + 180, "Video: VBE VESA 1024x768 @ 32bpp");
     }
 	
-    // =========================================================================
-    // 5. RESTAURACIÓN LIGERA DEL RATÓN (Algoritmo del Pintor Rápido)
-    // =========================================================================
+    // RESTAURACIÓN LIGERA DEL RATÓN (Algoritmo del Pintor Rápido)
     public static void clearMouse(int x, int y) {
         if (backgroundMode == 0) {
             setColor(0x00000055); fillRect(x, y, 14, 18);
@@ -451,9 +441,7 @@ public class Boot {
         fillRect(x + 3, y + 10, 2, 6);
     }
 
-    // =========================================================================
-    // 6. INICIALIZADOR VIRTUAL (VFS)
-    // =========================================================================
+    // INICIALIZADOR VIRTUAL (VFS)
     public static void initFS() {
         root = new Node(); root.name = "Root"; root.isDir = true; root.children = new Node[8]; root.childCount = 0; root.parent = null;
         Node appsDir = new Node(); appsDir.name = "APPS"; appsDir.isDir = true; appsDir.children = new Node[8]; appsDir.childCount = 0; appsDir.parent = root;
