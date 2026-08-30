@@ -22,16 +22,14 @@ SOFTWARE.*/
 
 package java.lang;
 
+package java.lang;
+
 public final class String {
     private final byte[] value;
     
     public String(byte[] bytes) {
         this.value = bytes;
-    }
-    
-    public int length() {
-        return value != null ? value.length : 0;
-    }
+    }   
     
     public boolean equals(Object anObject) {
         if (this == anObject) return true;
@@ -39,12 +37,25 @@ public final class String {
             String aString = (String)anObject;
             if (this.length() != aString.length()) return false;
             for (int i = 0; i < this.length(); i++) {
-                if (this.value[i] != aString.value[i]) return false;
+                if (this.value[i] != aString.getBytes()[i]) return false;
             }
             return true;
         }
         return false;
     }
+    
+    public static String valueOf(int i) {
+        return new StringBuilder().append(i).toString();
+    }
+	
+	// Para usar con StringBuilder y PrintStream cuando los implemente
+    public byte[] getBytes() {
+        return value;
+    }
+	
+	public int length() {
+        return value != null ? value.length : 0;
+    }    
     
     public int hashCode() {
         int h = 0;
