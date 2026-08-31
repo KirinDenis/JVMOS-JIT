@@ -58,11 +58,52 @@ public class Graphics2D {
 			// Syscall 5: Imprimir cadena texto en modo gráfico
             Native.sys(Native.SYS_DRAW_STRING, x, y, text, 0);
         }
-    }
-
-    public void drawChar(char c, int x, int y) {
-		// Syscall 15: Renderizar carácter en VRAM
+    }    
+	
+	public int drawChar(char c, int x, int y) {
+        // Syscall 15: Renderizar carácter en VRAM
         Native.sys(Native.SYS_DRAW_CHAR, x, y, (int) c, 0);
+        return x + 10; // Devuelve la siguiente posición X
+    }
+	
+	public int drawInt(int value, int x, int y) {
+        if (value == 0) {
+            drawChar('0', x, y);
+        }
+        int temp = value;
+        int len = 0;
+        boolean isNegative = false;
+        
+        if (temp < 0) {
+            isNegative = true;
+            temp = -temp;
+            value = temp;
+            len++;
+        }
+        
+        int t2 = temp;
+        while (t2 > 0) {
+            len++;
+            t2 /= 10;
+        }
+        
+        int currX = x + (len - 1) * 10;
+        int endX = x + len * 10;
+        
+        temp = value;
+        while (temp > 0) {
+			// Syscall 15: Renderizar carácter en VRAM
+            Native.sys(Native.SYS_DRAW_CHAR, currX, y, '0' + (temp % 10), 0);
+            currX -= 10;
+            temp /= 10;
+        }
+        
+        if (isNegative) {
+			// Syscall 15: Renderizar carácter en VRAM
+            Native.sys(Native.SYS_DRAW_CHAR, currX, y, '-', 0);
+        }
+        
+        return endX;
     }
     
     public int getPixel(int x, int y) {
