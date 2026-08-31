@@ -30,6 +30,7 @@ public class Graphics2D {
     public void setColor(Color c) {
         if (c != null) {
             this.currentColor = c;
+			// Syscall 1: Color activo VRAM
             Native.sys(Native.SYS_SET_COLOR, c.getRGB(), 0, 0, 0);
         }
     }
