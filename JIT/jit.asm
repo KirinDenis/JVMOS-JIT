@@ -1,24 +1,3 @@
-; MIT License
-;
-; Copyright (c) 2026 Allan (Slam)
-;
-; Permission is hereby granted, free of charge, to any person obtaining a copy
-; of this software and associated documentation files (the "Software"), to deal
-; in the Software without restriction, including without limitation the rights
-; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-; copies of the Software, and to permit persons to whom the Software is
-; furnished to do so, subject to the following conditions:
-;
-; The above copyright notice and this permission notice shall be included in all
-; copies or substantial portions of the Software.
-;
-; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-; SOFTWARE.
 ; ============================================================================
 ; JVMOS - JavaMonolitic JIT Engine (Pure Translation Unit)
 ; Formato: NASM x86 32-bit (Modo Protegido Bare-Metal)
@@ -71,7 +50,7 @@ section .text
 	extern current_class_ptr
 
 	extern sys_arg_id, sys_arg_a, sys_arg_b, sys_arg_c, sys_arg_d			
-	extern draw_char_vram, sys_draw_string, sys_serial_puts, sys_serial_putc
+	extern draw_char_vram, sys_draw_string, sys_serial_puts, sys_serial_putc, sys_serial_print_java
 	extern current_color
 	extern sys_read_keyboard_scancode, sys_set_keyboard_layout, sys_read_mouse
 	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel
@@ -316,11 +295,21 @@ sys_native_dispatch:
     cmp eax, 6
     je .sys_read_keyboard
     cmp eax, 7
-    je .sys_read_mouse	
+    je .sys_read_mouse
+	cmp eax, 8
+	je .sys_disk_read
+	cmp eax, 9
+	je .sys_disk_write   	
+	cmp eax, 10
+	je .sys_inb
+	cmp eax, 11
+    je .sys_outb
     cmp eax, 12
     je .sys_sleep
     cmp eax, 13
     je .sys_get_time
+	cmp eax, 14
+    je .sys_get_pixel
     cmp eax, 15
     je .sys_draw_char
     cmp eax, 16
@@ -333,6 +322,16 @@ sys_native_dispatch:
 	je .sys_serial_putc
 	cmp eax, 20
 	je .sys_serial_puts
+	cmp eax, 21
+    je .sys_pci_read
+    cmp eax, 22
+    je .sys_beep
+	cmp eax, 23
+    je .sys_rtl8139_init
+    cmp eax, 24
+    je .sys_rtl8139_send_packet
+    cmp eax, 25
+    je .sys_net_receive_packet
 
     xor eax, eax
     jmp .done
@@ -399,18 +398,52 @@ sys_native_dispatch:
     add esp, 4
     jmp .done
 
+.sys_disk_read:
+    push dword [sys_arg_c]  ; Puntero al Buffer
+    push dword [sys_arg_a]  ; LBA
+    call sys_disk_read_sector
+    add esp, 8
+    jmp .done
+
+.sys_disk_write:
+    push dword [sys_arg_c]  ; Puntero al Buffer
+    push dword [sys_arg_a]  ; LBA
+    call sys_disk_write_sector
+    add esp, 8
+    jmp .done
+	
+.sys_inb:
+    push dword [sys_arg_a]
+    call sys_inb
+    add esp, 4
+    jmp .done
+
+.sys_outb:
+    push dword [sys_arg_b]
+    push dword [sys_arg_a]
+    call sys_outb
+    add esp, 8
+    jmp .done
+
 .sys_sleep:
     push dword [sys_arg_a]
     call sys_sleep
     add esp, 4
     xor eax, eax
     jmp .done
-
+	
 .sys_get_time:
     push dword [sys_arg_a]
     call sys_get_time
     add esp, 4
     jmp .done
+	
+.sys_get_pixel:
+    push dword [sys_arg_b]
+    push dword [sys_arg_a]
+    call sys_get_pixel
+    add esp, 8
+    jmp .done	
 
 .sys_draw_char:
     push dword [current_color]
@@ -446,10 +479,46 @@ sys_native_dispatch:
     jmp .done
 
 .sys_serial_puts:
-    push dword [sys_arg_a]
-    call sys_serial_puts
+    push dword [sys_arg_c]      ; Las cadenas de Java vienen en arg_c
+    call sys_serial_print_java  ; <-- Ahora llama al handler exclusivo de Java
     add esp, 4
     xor eax, eax
+    jmp .done	
+
+.sys_pci_read:
+    push dword [sys_arg_d]
+    push dword [sys_arg_c]
+    push dword [sys_arg_b]
+    push dword [sys_arg_a]
+    call sys_pci_read_config
+    add esp, 16
+    jmp .done
+
+.sys_beep:
+    push dword [sys_arg_a]
+    call sys_beep
+    add esp, 4
+    jmp .done
+
+.sys_rtl8139_init:
+    push dword [sys_arg_a]
+    call sys_rtl8139_init
+    add esp, 4
+    jmp .done
+
+.sys_rtl8139_send_packet:
+    push dword [sys_arg_b]     ; Longitud
+    push dword [sys_arg_c]     ; Puntero al Buffer
+    call sys_rtl8139_send_packet
+    add esp, 8
+    xor eax, eax
+    jmp .done
+
+.sys_net_receive_packet:
+    push dword [sys_arg_b]
+    push dword [sys_arg_c]
+    call sys_net_receive_packet
+    add esp, 8
     jmp .done	
 
 .done:
