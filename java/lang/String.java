@@ -22,8 +22,6 @@ SOFTWARE.*/
 
 package java.lang;
 
-package java.lang;
-
 public final class String {
     private final byte[] value;
     
