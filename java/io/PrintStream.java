@@ -22,24 +22,49 @@ SOFTWARE.*/
 
 package java.io;
 
+import kernel.Native;
+
 public class PrintStream {
-    
     public void print(String s) {
         if (s == null) s = "null";
-        byte[] bytes = s.getBytes();
-        for (int i = 0; i < bytes.length; i++) {
-            // El syscall 19 = SYS_SERIAL_PUTC
-            kernel.Native.sys(19, bytes[i], 0, 0, 0); 
-        }
+        Native.sys(Native.SYS_SERIAL_PUTS, 0, 0, s, 0); 
     }
     
     public void println(String s) {
         print(s);
-        print("\r\n");
+        Native.sys(Native.SYS_SERIAL_PUTC, '\r', 0, 0, 0);
+        Native.sys(Native.SYS_SERIAL_PUTC, '\n', 0, 0, 0);
+    }
+    
+    public void print(int value) {
+        if (value == 0) {
+            Native.sys(Native.SYS_SERIAL_PUTC, '0', 0, 0, 0);
+            return;
+        }
+        int temp = value;
+        int len = 0;
+        boolean isNeg = false;
+        if (temp < 0) { isNeg = true; temp = -temp; value = temp; len++; }
+        int t2 = temp;
+        while (t2 > 0) { len++; t2 /= 10; }
+        
+        int currX = len;
+        byte[] chars = new byte[len];
+        temp = value;
+        while (temp > 0) {
+            chars[--currX] = (byte)('0' + (temp % 10));
+            temp /= 10;
+        }
+        if (isNeg) chars[0] = '-';
+        
+        for(int i = 0; i < len; i++) {
+            Native.sys(Native.SYS_SERIAL_PUTC, chars[i], 0, 0, 0);
+        }
     }
     
     public void println(int i) {
-        print(String.valueOf(i));
-        print("\r\n");
+        print(i);
+        Native.sys(Native.SYS_SERIAL_PUTC, '\r', 0, 0, 0);
+        Native.sys(Native.SYS_SERIAL_PUTC, '\n', 0, 0, 0);
     }
 }
