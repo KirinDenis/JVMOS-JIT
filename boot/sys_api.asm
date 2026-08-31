@@ -1,25 +1,3 @@
-; MIT License
-;
-; Copyright (c) 2026 Allan (Slam)
-;
-; Permission is hereby granted, free of charge, to any person obtaining a copy
-; of this software and associated documentation files (the "Software"), to deal
-; in the Software without restriction, including without limitation the rights
-; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-; copies of the Software, and to permit persons to whom the Software is
-; furnished to do so, subject to the following conditions:
-;
-; The above copyright notice and this permission notice shall be included in all
-; copies or substantial portions of the Software.
-;
-; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-; SOFTWARE.
-
 ; HAL Baremetal Mejorado para JVM (x86 32-bit)
 [bits 32]
 
@@ -44,6 +22,7 @@ global sys_memset
 global sys_serial_init
 global sys_serial_putc
 global sys_serial_puts
+global sys_serial_print_java
 
 ; --- PCI ---
 global sys_pci_read_config
@@ -131,10 +110,7 @@ rx_buffer           resb 8192 + 16
 
 ; SECCIÓN TEXT (CÓDIGO EJECUTABLE)
 section .text
-
-
 ; INICIALIZACIÓN DE HARDWARE CENTRALIZADA
-
 sys_hardware_init:
     cli
 
@@ -233,6 +209,32 @@ sys_serial_puts:
     jmp .loop
 .done:
     pop esi
+    pop ebp
+    ret
+
+sys_serial_print_java:
+    push ebp
+    mov ebp, esp
+    pusha
+    mov esi, [ebp + 8]
+    test esi, esi
+    jz .done
+    
+    movzx ecx, byte [esi - 2]
+    shl ecx, 8
+    mov cl, byte [esi - 1]
+    test ecx, ecx
+    jz .done
+.loop:
+    movzx eax, byte [esi]
+    push eax
+    call sys_serial_putc
+    add esp, 4
+    inc esi
+    dec ecx
+    jnz .loop
+.done:
+    popa
     pop ebp
     ret
 
@@ -1059,34 +1061,42 @@ sys_draw_string:
     pusha
     mov ebx, [ebp + 8]          ; x
     mov edx, [ebp + 12]         ; y
-    mov esi, [ebp + 16]         ; str
+    mov esi, [ebp + 16]         ; puntero al String
+    
+    movzx ecx, byte [esi - 2]
+    shl ecx, 8
+    mov cl, byte [esi - 1]      ; Extraer longitud del Constant Pool
+    
     mov edi, [current_color]
-    or edi, 0xFF000000          ; Garantizar visibilidad opaca
-    test esi, esi
+    or edi, 0xFF000000          
+    test ecx, ecx
     jz .done
+
 .char:
-    mov cl, [esi]
-    test cl, cl
-    jz .done
-    cmp cl, 13
-    je .done
-    cmp cl, 10
-    je .done
-    cmp cl, 32
-    jl .next
+    mov al, [esi]
+    cmp al, 13
+    je .skip_char
+    cmp al, 10
+    je .skip_char
+    cmp al, 32
+    jl .skip_char
+    
     pusha
     push edi
     push edx
     push ebx
-    movzx eax, cl
+    movzx eax, al
     push eax
     call draw_char_vram
     add esp, 16
     popa
-.next:
-    add ebx, 10                 ; Avance de ancho de carácter exacto (10 px)
+    
+.skip_char:
+    add ebx, 10
     inc esi
-    jmp .char
+    dec ecx
+    jnz .char
+
 .done:
     popa
     pop ebp
