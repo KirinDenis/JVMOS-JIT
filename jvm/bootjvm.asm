@@ -449,12 +449,13 @@ resolve_and_compile_java_method:
     mov [ebp - 12], ecx                 
     mov [ebp - 16], edi                 
 
-    ; --- EVALUACIÓN Y DESPACHO EN EL ORQUESTADOR ---
+    ; EVALUACIÓN Y DESPACHO EN EL ORQUESTADOR 
     mov esi, [ebp - 4]                  
     mov ecx, [ebp - 8]                  
 
-    cmp dword [esi], 0x6176616A         ; "java"
-    je .bypass_method
+	; Hack que impide que se lean otros archivos .class desde el grub
+    ;cmp dword [esi], 0x6176616A         ; "java"
+    ;je .bypass_method
 
     cmp ecx, 6
     jl .check_user_class
