@@ -25,11 +25,14 @@ package java.awt;
 import kernel.Native;
 
 public class Toolkit {
-    private static Toolkit defaultToolkit = new Toolkit();
+    private static Toolkit defaultToolkit; 
 
     private Toolkit() {}
 
     public static Toolkit getDefaultToolkit() {
+        if (defaultToolkit == null) {
+            defaultToolkit = new Toolkit();
+        }
         return defaultToolkit;
     }
 
