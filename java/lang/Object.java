@@ -28,10 +28,6 @@ public class Object {
         return this == obj; // Comparación de punteros nativa
     }
     public int hashCode() {
-        int h = 0;
-        for (int i = 0; i < length(); i++) {
-            h = 31 * h + value[i];
-        }
-        return h;
+        return 0;
     }
 }
