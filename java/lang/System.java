@@ -23,19 +23,20 @@ SOFTWARE.*/
 package java.lang;
 
 import java.io.PrintStream;
+import kernel.Native;
 
 public final class System {
     
-    public static final PrintStream out = new PrintStream();
+    public static PrintStream out;
 
     public static long currentTimeMillis() {
         // Syscall 18 = SYS_GET_TICKS
-        return kernel.Native.sys(18, 0, 0, 0, 0); 
+        return Native.sys(18, 0, 0, 0, 0); 
     }
 
     public static void exit(int status) {
         // Syscall 17 = SYS_EXIT
-        kernel.Native.sys(17, status, 0, 0, 0);
+        Native.sys(17, status, 0, 0, 0);
     }
 
     // Copia manual para eludir punteros inseguros de C
