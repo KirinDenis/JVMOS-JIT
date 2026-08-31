@@ -97,8 +97,7 @@ $(OS_ISO): $(KERNEL_BIN) kernel/Boot.class
 	grub-mkrescue -o $(OS_ISO) isodir
 
 run: $(OS_ISO)
-	qemu-system-i386 -cdrom $(OS_ISO) -drive file=disk.img,format=raw -m 128M -serial stdio -rtc base=localtime
-
+	qemu-system-i386 -cdrom $(OS_ISO) -drive file=disk.img,format=raw -m 128M -serial stdio -rtc base=localtime -machine pcspk-audiodev=snd0 -audiodev pa,id=snd0
 clean:
 	@$(CLEAN_CMD)
 
