@@ -145,6 +145,10 @@ public class Boot {
     private static int contextX, contextY, fileMenuX, fileMenuY, backgroundMode, newNameLen;
     private static int[] newNameBuf = new int[16];
 
+    // Cursor parpadeante de la consola de texto inicial (antes de startx)
+    private static boolean shellCursorOn = false;
+    private static int shellCursorX, shellCursorY;
+
     public static void main(String[] args) {
         // 1. INICIALIZACIÓN BAREMETAL DEL MICRO-RT
         java.lang.System.out = new PrintStream();
@@ -161,14 +165,16 @@ public class Boot {
         int cursorX = 85, cursorY = 80, lastKey = 0, cmdLen = 0;
         int[] cmdBuffer = new int[16];
         showCursor(cursorY);
+        drawShellCursor(cursorX, cursorY);
 
         while (true) {
             int asciiChar = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
 
             if (asciiChar != 0 && asciiChar != lastKey) {
                 if (asciiChar == 13) {
+                    eraseShellCursor();
                     cursorY += 25;
-                    
+
                     if (cmdLen == 6 && cmdBuffer[0] == 's' && cmdBuffer[1] == 't' && cmdBuffer[2] == 'a' && cmdBuffer[3] == 'r' && cmdBuffer[4] == 't' && cmdBuffer[5] == 'x') {
                         java.lang.System.out.println("[GUI] Arrancando entorno de escritorio...");
                         runStartX();
@@ -204,21 +210,31 @@ public class Boot {
                     if (cursorY > 700) { clearScreen(); cursorY = 40; }
                     showCursor(cursorY);
                     cursorX = 85;
+                    drawShellCursor(cursorX, cursorY);
                 } else if (asciiChar == 8) {
                     if (cmdLen > 0 && cursorX > 85) {
+                        eraseShellCursor();
                         cmdLen--; cmdBuffer[cmdLen] = 0; cursorX -= 10;
                         g.setColor(C_BLACK); g.fillRect(cursorX, cursorY, 12, 20);
+                        drawShellCursor(cursorX, cursorY);
                     }
                 } else if (asciiChar >= 32 && asciiChar <= 165) {
                     if (cmdLen < 15) {
+                        eraseShellCursor();
                         cmdBuffer[cmdLen] = asciiChar; cmdLen++;
                         g.setColor(C_WHITE); g.drawChar((char)asciiChar, cursorX, cursorY);
                         cursorX += 10;
+                        drawShellCursor(cursorX, cursorY);
                     }
                 }
                 lastKey = asciiChar;
             } else if (asciiChar == 0) {
                 lastKey = 0;
+                long shellTicks = java.lang.System.currentTimeMillis();
+                boolean wantCursorOn = ((shellTicks / 500) % 2) == 0;
+                if (wantCursorOn != shellCursorOn) {
+                    if (wantCursorOn) drawShellCursor(cursorX, cursorY); else eraseShellCursor();
+                }
             }
             Thread.sleep(1);
         }
@@ -234,6 +250,20 @@ public class Boot {
         C_SEL = new Color(0x00D0D0FF); C_FOLDER = new Color(0x00F0C000); C_FILE = new Color(0x00A0A0A0);
     }
 
+    // Arpegio de arranque para el PC Speaker (monofónico: una nota a la vez)
+    private static final int[] CHIME_FREQ = { 523, 659, 784, 1047, 1319, 1047, 784 }; // C5 E5 G5 C6 E6 C6 G5
+    private static final int[] CHIME_DUR  = { 190, 190, 190, 190, 330, 170, 480 };
+
+    public static void playBootChime() {
+        Toolkit tk = Toolkit.getDefaultToolkit();
+        for (int i = 0; i < CHIME_FREQ.length; i++) {
+            tk.beep(CHIME_FREQ[i]);
+            Thread.sleep(CHIME_DUR[i]);
+            tk.beep(0);
+            Thread.sleep(30);
+        }
+    }
+
     // =========================================================================
     // MOTOR GRÁFICO ORIENTADO A OBJETOS (JExplorer)
     // =========================================================================
@@ -245,7 +275,7 @@ public class Boot {
 
         initFS();
         redrawScreen();
-        Toolkit.getDefaultToolkit().beep(1200); Thread.sleep(100); Toolkit.getDefaultToolkit().beep(0);
+        playBootChime();
 
         int oldMx = 512, oldMy = 384, lastBtn = 0;
         drawMouse(oldMx, oldMy);
@@ -290,7 +320,9 @@ public class Boot {
                     if (key == 13 && newNameLen > 0) {
                         int[] custom = new int[newNameLen];
                         for(int i = 0; i < newNameLen; i++) custom[i] = newNameBuf[i];
-                        addNodeCustom(currentDir, custom, newNameLen, namingIsDir);
+                        if (!addNodeCustom(currentDir, custom, newNameLen, namingIsDir)) {
+                            Toolkit.getDefaultToolkit().beep(200); Thread.sleep(150); Toolkit.getDefaultToolkit().beep(0);
+                        }
                         isNaming = false; redrawScreen(); drawMouse(mx, my);
                     } else if (key == 27) { isNaming = false; redrawScreen(); drawMouse(mx, my);
                     } else if (key == 8 && newNameLen > 0) { newNameLen--; redrawScreen(); drawMouse(mx, my);
@@ -329,8 +361,12 @@ public class Boot {
                                 else if (my >= fileMenuY + 25 && my <= fileMenuY + 45) { isNaming = true; namingIsDir = true; newNameLen = 0; }
                                 else if (my >= fileMenuY + 45 && my <= fileMenuY + 65) {
                                     if (clipboardNode != null) {
-                                        if (clipboardNode.name != null) addNode(currentDir, clipboardNode.name, clipboardNode.isDir);
-                                        else addNodeCustom(currentDir, clipboardNode.customName, clipboardNode.customLen, clipboardNode.isDir);
+                                        boolean pasted = clipboardNode.name != null
+                                            ? addNode(currentDir, clipboardNode.name, clipboardNode.isDir)
+                                            : addNodeCustom(currentDir, clipboardNode.customName, clipboardNode.customLen, clipboardNode.isDir);
+                                        if (!pasted) {
+                                            Toolkit.getDefaultToolkit().beep(200); Thread.sleep(150); Toolkit.getDefaultToolkit().beep(0);
+                                        }
                                     }
                                 }
                             }
@@ -413,18 +449,20 @@ public class Boot {
         return null;
     }
 
-    public static void addNode(Node parent, String staticName, boolean isDir) {
-        if (parent.childCount >= 8) return; 
-        Node n = new Node(); n.name = staticName; n.isDir = isDir; n.parent = parent; n.childCount = 0; 
-        if (isDir) n.children = new Node[8]; 
+    public static boolean addNode(Node parent, String staticName, boolean isDir) {
+        if (parent.childCount >= 8) return false;
+        Node n = new Node(); n.name = staticName; n.isDir = isDir; n.parent = parent; n.childCount = 0;
+        if (isDir) n.children = new Node[8];
         parent.children[parent.childCount] = n; parent.childCount++;
+        return true;
     }
 
-    public static void addNodeCustom(Node parent, int[] customName, int customLen, boolean isDir) {
-        if (parent.childCount >= 8) return; 
-        Node n = new Node(); n.customName = customName; n.customLen = customLen; n.isDir = isDir; n.parent = parent; n.childCount = 0; 
-        if (isDir) n.children = new Node[8]; 
+    public static boolean addNodeCustom(Node parent, int[] customName, int customLen, boolean isDir) {
+        if (parent.childCount >= 8) return false;
+        Node n = new Node(); n.customName = customName; n.customLen = customLen; n.isDir = isDir; n.parent = parent; n.childCount = 0;
+        if (isDir) n.children = new Node[8];
         parent.children[parent.childCount] = n; parent.childCount++;
+        return true;
     }
 
     public static void removeNode(Node target) {
@@ -680,6 +718,20 @@ public class Boot {
     public static void initKeyboard() { Native.sys(Native.SYS_SET_KBD_LAYOUT, 1, 0, 0, 0); }
     public static void clearScreen() { g.setColor(C_BLACK); g.fillRect(0, 0, 1024, 768); }
     public static void showCursor(int y) { g.setColor(C_GREEN); g.drawString("JVMOS>", 20, y); }
+
+    public static void drawShellCursor(int x, int y) {
+        if (shellCursorOn) { g.setColor(C_BLACK); g.fillRect(shellCursorX, shellCursorY, 8, 18); }
+        shellCursorX = x; shellCursorY = y;
+        g.setColor(C_GREEN); g.fillRect(shellCursorX, shellCursorY, 8, 18);
+        shellCursorOn = true;
+    }
+
+    public static void eraseShellCursor() {
+        if (shellCursorOn) {
+            g.setColor(C_BLACK); g.fillRect(shellCursorX, shellCursorY, 8, 18);
+            shellCursorOn = false;
+        }
+    }
 
     public static void dramaticBIOS() {
         clearScreen(); try { Thread.sleep(250); } catch(Exception e) {}
