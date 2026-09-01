@@ -1411,67 +1411,71 @@ public class Boot {
     // The shape, exactly as it lands on screen: # is the black outline, . the
     // white interior, and the tip is the hotspot at (0,0).
     //
-    //     0123456789AB
+    //     0123456789AB C
     //  0  ##
-    //  1  ##
-    //  2  #.#
-    //  3  #.#
-    //  4  #..#
-    //  5  #..#
-    //  6  #...#
-    //  7  #...#
-    //  8  #....#
-    //  9  #....#
-    // 10  #.....#
-    // 11  #.....#
-    // 12  #......#
-    // 13  #......#          widest point of the head
-    // 14  #....#..#         the tail leaves the head here, still touching
-    // 15  #...# #..#
-    // 16  #..#   #..#
-    // 17  #.#     ####      the tail's cap
-    // 18  ##                the wing's tip, back on the spine
+    //  1  #.#
+    //  2  #..#
+    //  3  #...#
+    //  4  #....#
+    //  5  #.....#
+    //  6  #......#
+    //  7  #.......#
+    //  8  #........#
+    //  9  #.........#
+    // 10  #..........#
+    // 11  #...........#     widest point of the head
+    // 12  #.....#######     the head's bottom edge, and the tail's top
+    // 13  #....##..#        the tail leaves here, still touching the wing
+    // 14  #...#  #..#
+    // 15  #..#    #..#
+    // 16  #.#      #..#
+    // 17  ##       ####     the tail's cap, and the wing's tip on the spine
     //
-    // The previous version computed the lower half and left eleven pixels of
-    // interior touching the background: the head's right edge stopped dead at
-    // its widest row with nothing below it, and the tail had an outline only
-    // on its right, so its white core was open along the whole left side. That
-    // is the missing right side. Every white pixel here has shape on all four
-    // sides, which is what makes the arrow read as one closed object.
+    // The head widens by one column per row. It used to widen by one every
+    // TWO rows, which is what made the arrow a sliver with no right-hand side:
+    // at its widest the white interior was six pixels across where it should
+    // be eleven.
+    //
+    // Every white pixel has shape on all four sides, which is what makes it
+    // read as one closed object; tests/pointer_shape.js renders this method
+    // out of the source and checks exactly that.
     static void drawPointer(int x, int y) {
         int i;
 
         g.setRGB(0x00000000);
         i = 0;
-        while (i < 14) {                        // head, a 1:2 slope
-            g.fillRect(x, y + i, i / 2 + 2, 1);
+        while (i < 12) {                        // head, one column per row
+            g.fillRect(x, y + i, i + 2, 1);
             i = i + 1;
         }
+        g.fillRect(x, y + 12, 13, 1);           // bottom edge of the head
         i = 0;
         while (i < 5) {                         // wing, closing the head back
-            g.fillRect(x, y + 14 + i, 6 - i, 1);        // onto the spine
+            g.fillRect(x, y + 13 + i, 6 - i, 1);        // onto the spine
             i = i + 1;
         }
         i = 0;
         while (i < 4) {                         // tail, angled down-right
-            g.fillRect(x + 5 + i, y + 14 + i, 4, 1);
+            g.fillRect(x + 6 + i, y + 13 + i, 4, 1);
             i = i + 1;
         }
+        g.fillRect(x + 9, y + 17, 4, 1);        // the tail's cap
 
         g.setRGB(C_TEXTLT);
-        i = 2;
-        while (i < 14) {                        // interior of the head
-            g.fillRect(x + 1, y + i, i / 2, 1);
+        i = 1;
+        while (i < 12) {                        // interior of the head
+            g.fillRect(x + 1, y + i, i, 1);
             i = i + 1;
         }
+        g.fillRect(x + 1, y + 12, 5, 1);        // interior alongside the notch
         i = 0;
         while (i < 4) {                         // interior of the wing
-            g.fillRect(x + 1, y + 14 + i, 4 - i, 1);
+            g.fillRect(x + 1, y + 13 + i, 4 - i, 1);
             i = i + 1;
         }
         i = 0;
-        while (i < 3) {                         // core of the tail, two pixels
-            g.fillRect(x + 6 + i, y + 14 + i, 2, 1);    // wide so it reads as a
+        while (i < 4) {                         // core of the tail, two pixels
+            g.fillRect(x + 7 + i, y + 13 + i, 2, 1);    // wide so it reads as a
             i = i + 1;                                  // tail and not a line
         }
     }

@@ -91,11 +91,25 @@ for (let y = 0; y < H; y++) {
 }
 say(holes.length === 0, `the outline is closed${holes.length ? ": " + holes.join("; ") : ""}`);
 
+// The head has to be a triangle, not a sliver. A version that widened by one
+// column every two rows was closed and still wrong: it had no right-hand side,
+// which is what was reported, twice. Closure alone does not catch that.
+let interior = 0, tall = 0;
+for (let y = 0; y < H; y++) {
+  let run = 0;
+  for (let x = 0; x < W; x++) {
+    if (px[y][x] === ".") { run++; if (run > interior) interior = run; } else run = 0;
+  }
+  if (px[y].some((c) => c !== " ")) tall = y + 1;
+}
+say(interior >= 9, `the head is ${interior} pixels across at its widest, not a sliver`);
+say(interior * 2 > tall, `it is ${interior + 2} wide against ${tall} tall, so it reads as an arrow`);
+
 // The tail has to be more than a black line, or it disappears into the border.
 let widest = 0;
-for (let y = 14; y < H; y++) {
+for (let y = 13; y < H; y++) {
   let run = 0;
-  for (let x = 5; x < W; x++) {
+  for (let x = 6; x < W; x++) {
     if (px[y][x] === ".") { run++; if (run > widest) widest = run; } else run = 0;
   }
 }

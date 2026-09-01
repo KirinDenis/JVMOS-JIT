@@ -127,8 +127,9 @@ clusters really went back to the FAT.
 # The mouse pointer, by rendering it
 
 `tests/pointer_shape.js` lifts `drawPointer` out of `kernel/Boot.java`, runs it
-against a mock that draws into a character grid, prints the arrow and checks
-that no interior pixel touches the background.
+against a mock that draws into a character grid, prints the arrow, and checks
+that the outline is closed, that the head is a triangle rather than a sliver,
+and that the tail's core is more than one pixel wide.
 
 ```
 node tests/pointer_shape.js
@@ -136,12 +137,20 @@ node tests/pointer_shape.js some/other/Boot.java
 ```
 
 The body is taken from the real source rather than copied, so the check cannot
-drift away from what ships. It was written after the arrow was reported as
-missing its right side twice: reading the code did not show it, and printing it
-showed it at once. The version that shipped had eleven interior pixels open to
-the background, the head's right edge stopping dead at its widest row and the
-tail outlined only on its right. The second argument is how that was confirmed
--- the test fails on the old file and passes on the new one.
+drift away from what ships. It exists because the arrow was reported as missing
+its right side twice, and both times reading the code did not show it while
+printing it showed it at once.
+
+There were two separate faults, which is why the width checks are there as well
+as the closure check. The first was a broken outline: eleven interior pixels
+open to the background, the head's right edge stopping dead at its widest row
+and the tail outlined only on its right. The second survived that fix -- the
+head widened by one column every two rows instead of one per row, so it was a
+perfectly closed sliver six pixels across where it should be eleven. A closed
+shape can still be the wrong shape.
+
+The optional path argument is how each fix was confirmed: the test fails on the
+old file and passes on the new one.
 
 # What still cannot be checked here
 The assembler and the picture. There is no nasm and no gcc on a typical Windows
