@@ -50,6 +50,7 @@ global sys_fill_polygon
 global sys_draw_string
 global sys_present
 global sys_set_clip
+global sys_fill_blend
 global current_color
 global vram_back_buffer
 global clip_x
@@ -1102,6 +1103,92 @@ sys_fill_rect:
     inc dword [ebp + 12]
     dec edx
     jnz .row
+.done:
+    pop esi
+    pop ebx
+    pop edi
+    pop ebp
+    ret
+
+; sys_fill_blend(x, y, w, h): mezcla current_color al 50% sobre lo que ya hay.
+; Usado para las sombras de las ventanas. La mezcla es (dst>>1)+(src>>1) sobre
+; cada canal, que no necesita multiplicar: basta enmascarar los bits que se
+; desbordarían de un canal al siguiente.
+sys_fill_blend:
+    push ebp
+    mov ebp, esp
+    push edi
+    push ebx
+    push esi
+
+    ; Recorte idéntico al de sys_fill_rect
+    mov eax, [ebp + 8]
+    mov ebx, [ebp + 12]
+    mov ecx, [ebp + 16]
+    add ecx, eax                ; x2
+    mov edx, [ebp + 20]
+    add edx, ebx                ; y2
+
+    mov esi, [clip_x]
+    cmp eax, esi
+    jge .bl
+    mov eax, esi
+.bl:
+    mov esi, [clip_y]
+    cmp ebx, esi
+    jge .bt
+    mov ebx, esi
+.bt:
+    mov esi, [clip_x2]
+    cmp ecx, esi
+    jle .br
+    mov ecx, esi
+.br:
+    mov esi, [clip_y2]
+    cmp edx, esi
+    jle .bb
+    mov edx, esi
+.bb:
+    sub ecx, eax                ; w
+    jle .done
+    sub edx, ebx                ; h
+    jle .done
+
+    mov [ebp + 8], eax
+    mov [ebp + 12], ebx
+    mov [ebp + 16], ecx
+    mov [ebp + 20], edx
+
+    ; esi = mitad del color de origen, precalculada una sola vez
+    mov esi, [current_color]
+    shr esi, 1
+    and esi, 0x007F7F7F
+
+.row:
+    mov ecx, [ebp + 12]         ; y
+    imul ecx, [g_pitch]
+    mov eax, [ebp + 8]          ; x
+    shl eax, 2
+    add ecx, eax
+    mov edi, [vram_back_buffer]
+    add edi, ecx
+
+    mov ecx, [ebp + 16]         ; w
+.px:
+    mov eax, [edi]
+    shr eax, 1
+    and eax, 0x007F7F7F
+    add eax, esi
+    or  eax, 0xFF000000
+    mov [edi], eax
+    add edi, 4
+    dec ecx
+    jnz .px
+
+    inc dword [ebp + 12]
+    dec dword [ebp + 20]
+    jnz .row
+
 .done:
     pop esi
     pop ebx

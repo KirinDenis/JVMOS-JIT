@@ -125,6 +125,11 @@ public class Graphics2D {
         Native.sys(Native.SYS_SET_CLIP, x, y, w, h);
     }
 
+    // Rellena mezclando el color actual al 50% con el fondo existente.
+    public void fillBlend(int x, int y, int width, int height) {
+        Native.sys(Native.SYS_FILL_BLEND, x, y, width, height);
+    }
+
     public void present() {
         // Syscall 26: copiar el buffer trasero completo a la VRAM real (doble buffer, evita el parpadeo)
         Native.sys(Native.SYS_PRESENT, 0, 0, 0, 0);

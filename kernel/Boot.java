@@ -65,6 +65,7 @@ public class Boot {
     static final int TITLE_H = 20;
     static final int BORDER = 3;
     static final int GRIP = 14;
+    static final int SHADOW = 6;
     static final int MIN_W = 260;
     static final int MIN_H = 140;
 
@@ -854,6 +855,7 @@ public class Boot {
         int h = wh[i];
         boolean active = zorder[WIN_COUNT - 1] == i;
 
+        if (wMax[i] == 0) dropShadow(x, y, w, h);
         panel(x, y, w, h, C_FACE, 1);
 
         int tc = C_TITLE_B;
@@ -880,6 +882,15 @@ public class Boot {
         g.setClip(0, 0, SCR_W, SCR_H);
 
         if (wMax[i] == 0) drawGrip(x + w - GRIP - 2, y + h - GRIP - 2);
+    }
+
+    // Only the L-shaped band that stays visible is blended: filling the whole
+    // offset rectangle would darken ~200k pixels per window that the window
+    // itself immediately paints over.
+    static void dropShadow(int x, int y, int w, int h) {
+        g.setRGB(0x00000000);
+        g.fillBlend(x + w, y + SHADOW, SHADOW, h);
+        g.fillBlend(x + SHADOW, y + h, w, SHADOW);
     }
 
     static String winTitle(int i) {
@@ -947,6 +958,7 @@ public class Boot {
         int x = menuX(menuOpen);
         int n = menuItems(menuOpen);
         int h = n * 20 + 6;
+        dropShadow(x, MENU_H, 180, h);
         panel(x, MENU_H, 180, h, C_FACE, 1);
         if (menuOpen == 0) {
             dropItem("Open All Windows", x, 0);
@@ -1010,21 +1022,40 @@ public class Boot {
     }
 
     // ---- mouse pointer ---------------------------------------------------
+    // Classic arrow: a narrow head (1:2 slope, not the 45-degree wedge it used
+    // to be) ending in a point on the left, and a tail that leaves the head on
+    // the right and slants down-right instead of hanging straight down.
     static void drawPointer(int x, int y) {
+        // soft shadow so the pointer stays readable over any background
+        g.setRGB(0x00000000);
+        g.fillBlend(x + 2, y + 3, 7, 13);
+
         g.setRGB(C_TEXT);
         int i = 0;
-        while (i < 12) {
-            g.fillRect(x, y + i, i + 2, 1);
+        while (i < 12) {                        // head outline
+            g.fillRect(x, y + i, i / 2 + 2, 1);
             i = i + 1;
         }
-        g.fillRect(x + 2, y + 12, 4, 5);
+        g.fillRect(x, y + 12, 3, 1);            // lower point of the head
+        g.fillRect(x, y + 13, 2, 1);
+
+        int k = 0;
+        while (k < 6) {                         // tail, angled down-right
+            g.fillRect(x + 4 + k / 2, y + 12 + k, 3, 1);
+            k = k + 1;
+        }
+
         g.setRGB(C_TEXTLT);
-        i = 1;
-        while (i < 10) {
-            g.fillRect(x + 1, y + i, i, 1);
+        i = 2;
+        while (i < 12) {                        // white interior of the head
+            g.fillRect(x + 1, y + i, i / 2, 1);
             i = i + 1;
         }
-        g.fillRect(x + 3, y + 10, 2, 6);
+        k = 0;
+        while (k < 5) {                         // white core of the tail
+            g.fillRect(x + 5 + k / 2, y + 12 + k, 1, 1);
+            k = k + 1;
+        }
     }
 
     // ======================================================================
