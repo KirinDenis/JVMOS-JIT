@@ -5,3 +5,4 @@
 /.vs
 /local-run
 tests/build/
+wasm/guest/target/

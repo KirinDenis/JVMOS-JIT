@@ -217,7 +217,7 @@ public class Boot {
         setWin(W_SYSTEM, 150, 430, 430, 250);
         setWin(W_ABOUT, 300, 220, 420, 220);
         setWin(W_SOKOBAN, 430, 120, 540, 520);
-        setWin(W_WASM, 120, 150, 400, 330);
+        setWin(W_WASM, 120, 150, 470, 380);
 
         wOpen[W_GALLERY] = 1;
         wOpen[W_FILES] = 1;
@@ -403,6 +403,11 @@ public class Boot {
 
         if (top == W_SOKOBAN && wMin[top] == 0 && code != K_TAB) {
             sokoKey(code);
+            return;
+        }
+
+        if (top == W_WASM && wMin[top] == 0 && code != K_TAB) {
+            wasmKey(code);
             return;
         }
 
@@ -973,7 +978,7 @@ public class Boot {
         if (i == W_FILES) return "File Manager";
         if (i == W_SYSTEM) return "System Info";
         if (i == W_SOKOBAN) return "Sokoban";
-        if (i == W_WASM) return "WASM Sandbox";
+        if (i == W_WASM) return "Sokoban (Rust)";
         return "About JVMOS";
     }
 
@@ -1590,17 +1595,41 @@ public class Boot {
     // guest is handed nothing but the size of its window: it draws in its own
     // coordinates from 0,0, the host translates, and every memory access it
     // makes is bounds checked against the one page it declared.
+    // Translates desktop keys into the guest's own small code set, so neither
+    // side depends on the other's keyboard details.
+    static void wasmKey(int code) {
+        int k = 0;
+        if (code == K_UP) k = 1;
+        else if (code == K_DOWN) k = 2;
+        else if (code == K_LEFT) k = 3;
+        else if (code == K_RIGHT) k = 4;
+        else if (code == 114) k = 5;          // R
+        else if (code == 110) k = 6;          // N
+        else if (code == 112) k = 7;          // P
+        if (k != 0) Native.sys(Native.SYS_WASM_KEY, k, 0, 0, 0);
+        paint();
+    }
+
+    // Everything below the caption is drawn by a Rust program compiled to
+    // WebAssembly and executed by the interpreter in the kernel. The board,
+    // the rules and the level maps all live inside the guest; this class only
+    // lends it a rectangle and a font.
     static void drawWasm(int x, int y, int w, int h) {
         g.setRGB(C_TITLE_A);
-        g.drawString("WebAssembly guest", x, y);
+        g.drawString("Rust guest, sandboxed WebAssembly", x, y);
         g.setRGB(C_DARK);
-        g.drawString("sandboxed, bounds-checked memory", x, y + 18);
+        g.drawString("Level", x, y + 22);
+        g.drawString("Moves", x + 96, y + 22);
+        g.drawString("Pushes", x + 184, y + 22);
+        g.drawString("Done", x + 288, y + 22);
+        g.setRGB(C_DARK);
+        g.drawString("Arrows move   R restart   N next   P previous", x, y + 40);
 
-        int r = Native.sys(Native.SYS_WASM_DRAW, x, y + 44, w, h - 44);
+        int r = Native.sys(Native.SYS_WASM_DRAW, x, y + 58, w, h - 58);
         if (r < 0) {
             g.setRGB(C_RED);
-            g.drawString("guest refused to run, code", x, y + 50);
-            g.drawInt(0 - r, x + 216, y + 50);
+            g.drawString("guest refused to run, error", x, y + 80);
+            g.drawInt(0 - r, x + 224, y + 80);
         }
     }
 

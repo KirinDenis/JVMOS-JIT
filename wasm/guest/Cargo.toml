@@ -1,0 +1,17 @@
+[package]
+name = "sokoban_guest"
+version = "1.0.0"
+edition = "2021"
+
+# cdylib so the wasm32 target emits a plain module with our exports and no
+# runtime entry point of its own.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = "z"     # the whole module is embedded in the kernel image
+lto = true
+panic = "abort"     # no unwinding machinery; panics become a wasm trap
+codegen-units = 1
+strip = true

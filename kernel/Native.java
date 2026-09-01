@@ -57,7 +57,8 @@ public class Native {
     public static final int SYS_STR_LEN          = 29; // Longitud de un literal de cadena
     public static final int SYS_SET_BLEND        = 31; // Opacidad de fill_blend (1/2^k)
     public static final int SYS_C_SELFTEST       = 32; // Comprueba que el codigo C esta enlazado
-    public static final int SYS_WASM_DRAW        = 33; // Ejecuta el modulo WebAssembly invitado
+    public static final int SYS_WASM_DRAW        = 33; // Ejecuta un fotograma del invitado WebAssembly
+    public static final int SYS_WASM_KEY         = 34; // Encola una tecla para el invitado
     public static final int SYS_STR_BYTE         = 30; // Byte i-esimo de un literal de cadena
 
 
