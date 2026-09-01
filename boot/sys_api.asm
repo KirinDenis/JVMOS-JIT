@@ -51,6 +51,7 @@ global sys_draw_string
 global sys_present
 global sys_set_clip
 global sys_fill_blend
+global sys_set_blend
 global sys_str_len
 global sys_str_byte
 global current_color
@@ -102,6 +103,12 @@ vram_back_buffer: dd 0x00600000
 ; RECTÁNGULO DE RECORTE: fill_rect, draw_pixel y draw_char_vram descartan todo
 ; lo que caiga fuera. Permite que una ventana dibuje su contenido sin salirse
 ; de su marco. x2/y2 son exclusivos. sys_hardware_init lo abre a pantalla completa.
+; Nivel de mezcla de sys_fill_blend: la opacidad es 1/2^blend_shift, de modo
+; que basta desplazar y enmascarar (nada de multiplicar por pixel). Varias
+; pasadas superpuestas con poca opacidad producen una sombra degradada.
+blend_shift: dd 1
+blend_mask:  dd 0x007F7F7F
+
 clip_x:  dd 0
 clip_y:  dd 0
 clip_x2: dd 1024
@@ -979,6 +986,40 @@ sys_set_color:
     pop ebp
     ret
 
+; sys_set_blend(k): opacidad de sys_fill_blend = 1/2^k, con k entre 1 y 6
+sys_set_blend:
+    push ebp
+    mov ebp, esp
+    push ebx
+    push ecx
+
+    mov ecx, [ebp + 8]
+    cmp ecx, 1
+    jge .lo_ok
+    mov ecx, 1
+.lo_ok:
+    cmp ecx, 6
+    jle .hi_ok
+    mov ecx, 6
+.hi_ok:
+    mov [blend_shift], ecx
+
+    mov eax, 0xFF
+    shr eax, cl                 ; valor maximo por canal tras el desplazamiento
+    mov ebx, eax
+    shl ebx, 8
+    or  eax, ebx
+    mov ebx, eax
+    shl ebx, 16
+    or  eax, ebx
+    and eax, 0x00FFFFFF
+    mov [blend_mask], eax
+
+    pop ecx
+    pop ebx
+    pop ebp
+    ret
+
 ; sys_set_clip(x, y, w, h): limita todo el dibujo posterior a ese rectángulo
 sys_set_clip:
     push ebp
@@ -1161,30 +1202,33 @@ sys_fill_blend:
     mov [ebp + 16], ecx
     mov [ebp + 20], edx
 
-    ; esi = mitad del color de origen, precalculada una sola vez
+    ; esi = aporte del color de origen, precalculado una sola vez
+    mov ecx, [blend_shift]
     mov esi, [current_color]
-    shr esi, 1
-    and esi, 0x007F7F7F
+    shr esi, cl
+    and esi, [blend_mask]
 
 .row:
-    mov ecx, [ebp + 12]         ; y
-    imul ecx, [g_pitch]
+    mov eax, [ebp + 12]         ; y
+    imul eax, [g_pitch]
+    mov edi, [vram_back_buffer]
+    add edi, eax
     mov eax, [ebp + 8]          ; x
     shl eax, 2
-    add ecx, eax
-    mov edi, [vram_back_buffer]
-    add edi, ecx
+    add edi, eax
 
-    mov ecx, [ebp + 16]         ; w
+    mov edx, [ebp + 16]         ; w  (ecx queda reservado para el shift)
 .px:
     mov eax, [edi]
-    shr eax, 1
-    and eax, 0x007F7F7F
-    add eax, esi
+    mov ebx, eax
+    shr ebx, cl
+    and ebx, [blend_mask]
+    sub eax, ebx                ; dst - dst/2^k
+    add eax, esi                ; + src/2^k
     or  eax, 0xFF000000
     mov [edi], eax
     add edi, 4
-    dec ecx
+    dec edx
     jnz .px
 
     inc dword [ebp + 12]

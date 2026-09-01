@@ -125,7 +125,12 @@ public class Graphics2D {
         Native.sys(Native.SYS_SET_CLIP, x, y, w, h);
     }
 
-    // Rellena mezclando el color actual al 50% con el fondo existente.
+    // Opacidad de fillBlend: 1/2^k (k=1 -> 50%, k=2 -> 25%, k=3 -> 12.5%).
+    public void setBlend(int k) {
+        Native.sys(Native.SYS_SET_BLEND, k, 0, 0, 0);
+    }
+
+    // Rellena mezclando el color actual con el fondo, con la opacidad activa.
     public void fillBlend(int x, int y, int width, int height) {
         Native.sys(Native.SYS_FILL_BLEND, x, y, width, height);
     }

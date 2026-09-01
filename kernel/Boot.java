@@ -62,29 +62,38 @@ public class Boot {
     static final int DESK_TOP = MENU_H;
     static final int DESK_BOT = TASK_Y;
 
-    static final int TITLE_H = 20;
+    static final int TITLE_H = 26;
     static final int BORDER = 3;
     static final int GRIP = 14;
-    static final int SHADOW = 6;
+    static final int SHADOW = 12;
+    static final int TBTN = 18;      // title bar button size
     static final int MIN_W = 260;
     static final int MIN_H = 140;
 
     // ---- palette (0x00RRGGBB) -------------------------------------------
-    static final int C_DESK = 0x00103060;
-    static final int C_DESK2 = 0x0017417A;
-    static final int C_FACE = 0x00C0C0C0;
+    // Neutral surfaces and text follow KDE Breeze, which is tuned for long
+    // reading: body text is #232629 rather than pure black, and secondary text
+    // is a blue-grey #707D8A that still reads against the surface (the old
+    // #868686 on grey was the reason the help line went unnoticed).
+    // One deep teal carries every interactive accent.
+    static final int C_DESK = 0x001B2430;      // desktop, top of the gradient
+    static final int C_DESK2 = 0x000E1620;     // desktop, bottom
+    static final int C_FACE = 0x00EFF0F1;      // window surface
+    static final int C_SURF2 = 0x00E3E6E9;     // buttons, recessed strips
     static final int C_LIGHT = 0x00FFFFFF;
-    static final int C_DARK = 0x00868686;
-    static final int C_SHADOW = 0x00404040;
-    static final int C_TITLE_A = 0x00003C82;
-    static final int C_TITLE_B = 0x00787878;
-    static final int C_TEXT = 0x00000000;
+    static final int C_DARK = 0x005A6472;      // secondary text, 5.3:1 on the surface
+    static final int C_MUTED = 0x008A96A3;     // genuinely inactive, on dark only
+    static final int C_SHADOW = 0x00C6CDD3;    // hairline
+    static final int C_LINE2 = 0x00AEB7BF;     // stronger hairline
+    static final int C_TITLE_A = 0x0014606B;   // accent: active title bar + labels
+    static final int C_TITLE_B = 0x00DCE0E4;   // inactive title bar
+    static final int C_TEXT = 0x00232629;
     static final int C_TEXTLT = 0x00FFFFFF;
     static final int C_FIELD = 0x00FFFFFF;
-    static final int C_SEL = 0x00003C82;
-    static final int C_GREEN = 0x0000A040;
-    static final int C_RED = 0x00B02020;
-    static final int C_AMBER = 0x00E0A000;
+    static final int C_SEL = 0x0012808F;       // selection, brighter teal
+    static final int C_GREEN = 0x002E7D4F;
+    static final int C_RED = 0x00C0392B;
+    static final int C_AMBER = 0x00C9860A;
 
     // ---- window ids ------------------------------------------------------
     static final int WIN_COUNT = 5;
@@ -548,20 +557,13 @@ public class Boot {
     }
 
     // Dotted focus rectangle, Turbo Vision style.
+    // Solid accent outline: a dotted black ring is another 90s tell.
     static void focusRing(int x, int y, int w, int h) {
-        g.setRGB(C_TEXT);
-        int p = 0;
-        while (p < w) {
-            g.fillRect(x + p, y, 1, 1);
-            g.fillRect(x + p, y + h - 1, 1, 1);
-            p = p + 2;
-        }
-        p = 0;
-        while (p < h) {
-            g.fillRect(x, y + p, 1, 1);
-            g.fillRect(x + w - 1, y + p, 1, 1);
-            p = p + 2;
-        }
+        g.setRGB(C_SEL);
+        g.fillRect(x, y, w, 1);
+        g.fillRect(x, y + h - 1, w, 1);
+        g.fillRect(x, y, 1, h);
+        g.fillRect(x + w - 1, y, 1, h);
     }
 
     // ======================================================================
@@ -644,23 +646,23 @@ public class Boot {
     // Close / maximize / minimize buttons in the title bar. Returns true when
     // the click was consumed.
     static boolean titleButtons(int i) {
-        int bx = wx[i] + ww[i] - 22;
-        int by = wy[i] + 3;
-        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+        int by = wy[i] + BORDER + (TITLE_H - BORDER - TBTN) / 2;
+        int bx = wx[i] + ww[i] - 26;
+        if (hit(mouseX, mouseY, bx, by, TBTN, TBTN)) {
             wOpen[i] = 0;
             clickTone();
             paint();
             return true;
         }
-        bx = bx - 20;
-        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+        bx = bx - 22;
+        if (hit(mouseX, mouseY, bx, by, TBTN, TBTN)) {
             toggleMax(i);
             clickTone();
             paint();
             return true;
         }
-        bx = bx - 20;
-        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+        bx = bx - 22;
+        if (hit(mouseX, mouseY, bx, by, TBTN, TBTN)) {
             wMin[i] = 1;
             clickTone();
             paint();
@@ -862,16 +864,24 @@ public class Boot {
         g.present();
     }
 
+    // Vertical gradient in 6px bands: 120 fills, about the same cost as the
+    // old scanline texture, but it reads as depth rather than as a pattern.
     static void drawDesktop() {
-        g.setRGB(C_DESK);
-        g.fillRect(0, DESK_TOP, SCR_W, DESK_BOT - DESK_TOP);
-        if (chkGrid == 1) {
-            g.setRGB(C_DESK2);
-            int y = DESK_TOP;
-            while (y < DESK_BOT) {
-                g.fillRect(0, y, SCR_W, 1);
-                y = y + 4;
-            }
+        if (chkGrid == 0) {
+            g.setRGB(C_DESK);
+            g.fillRect(0, DESK_TOP, SCR_W, DESK_BOT - DESK_TOP);
+            return;
+        }
+        int span = DESK_BOT - DESK_TOP;
+        int y = DESK_TOP;
+        while (y < DESK_BOT) {
+            int t = (y - DESK_TOP) * 255 / span;
+            int r = 0x1B + (0x0E - 0x1B) * t / 255;
+            int gr = 0x24 + (0x16 - 0x24) * t / 255;
+            int b = 0x30 + (0x20 - 0x30) * t / 255;
+            g.setRGB((r * 65536) + (gr * 256) + b);
+            g.fillRect(0, y, SCR_W, 6);
+            y = y + 6;
         }
     }
 
@@ -883,20 +893,30 @@ public class Boot {
         int h = wh[i];
         boolean active = zorder[WIN_COUNT - 1] == i;
 
-        if (wMax[i] == 0) dropShadow(x, y, w, h);
+        if (wMax[i] == 0) {
+            if (active) dropShadow(x, y, w, h); else softShadow(x, y, w, h);
+        }
         panel(x, y, w, h, C_FACE, 1);
 
         int tc = C_TITLE_B;
-        if (active) tc = C_TITLE_A;
+        int ti = C_DARK;   // readable on the light inactive bar
+        if (active) {
+            tc = C_TITLE_A;
+            ti = C_TEXTLT;
+        }
+        int barY = y + BORDER;
+        int barH = TITLE_H - BORDER;
         g.setRGB(tc);
-        g.fillRect(x + BORDER, y + BORDER, w - 2 * BORDER, TITLE_H - BORDER);
+        g.fillRect(x + BORDER, barY, w - 2 * BORDER, barH);
 
-        g.setRGB(C_TEXTLT);
-        g.drawString(winTitle(i), x + 10, y + 3);
+        // Caption centred in the bar instead of pinned to its top edge.
+        g.setRGB(ti);
+        g.drawString(winTitle(i), x + 12, barY + (barH - CH_H) / 2);
 
-        drawTitleBtn(x + w - 62, y + 3, 0);
-        drawTitleBtn(x + w - 42, y + 3, 1);
-        drawTitleBtn(x + w - 22, y + 3, 2);
+        int btnY = barY + (barH - TBTN) / 2;
+        drawTitleBtn(x + w - 70, btnY, 0, active);
+        drawTitleBtn(x + w - 48, btnY, 1, active);
+        drawTitleBtn(x + w - 26, btnY, 2, active);
 
         int cx = x + BORDER + 5;
         int cy = y + TITLE_H + 4;
@@ -915,10 +935,33 @@ public class Boot {
     // Only the L-shaped band that stays visible is blended: filling the whole
     // offset rectangle would darken ~200k pixels per window that the window
     // itself immediately paints over.
+    //
+    // The bands are nested and each pass is faint, so the overlap does the
+    // fading for us: the strip hugging the frame gets three passes, the outer
+    // strip only one. The bottom band stops at the window edge and the right
+    // band owns the corner, so nothing is blended twice by accident - that
+    // double-darkened corner square was the artefact under the old version.
     static void dropShadow(int x, int y, int w, int h) {
         g.setRGB(0x00000000);
-        g.fillBlend(x + w, y + SHADOW, SHADOW, h);
-        g.fillBlend(x + SHADOW, y + h, w, SHADOW);
+        g.setBlend(3);
+        int j = 0;
+        while (j < 3) {
+            int s = SHADOW - j * 4;
+            g.fillBlend(x + w, y + SHADOW, s, h);
+            g.fillBlend(x + SHADOW, y + h, w - SHADOW, s);
+            j = j + 1;
+        }
+        g.setBlend(1);
+    }
+
+    // Unfocused windows sit lower: one faint, narrow band. Reserving the deep
+    // shadow for the active window also keeps the cost roughly where it was.
+    static void softShadow(int x, int y, int w, int h) {
+        g.setRGB(0x00000000);
+        g.setBlend(4);
+        g.fillBlend(x + w, y + 5, 5, h);
+        g.fillBlend(x + 5, y + h, w - 5, 5);
+        g.setBlend(1);
     }
 
     static String winTitle(int i) {
@@ -929,21 +972,30 @@ public class Boot {
         return "About JVMOS";
     }
 
-    // kind: 0 minimize, 1 maximize, 2 close
-    static void drawTitleBtn(int x, int y, int kind) {
-        panel(x, y, 18, 14, C_FACE, 1);
-        g.setRGB(C_TEXT);
+    // kind: 0 minimize, 1 maximize, 2 close.
+    // Glyph only, no button box: the close glyph turns red so the destructive
+    // action is the one thing that stands out.
+    static void drawTitleBtn(int x, int y, int kind, boolean active) {
+        int ink = C_DARK;
+        if (active) ink = C_TEXTLT;
+        if (kind == 2) {
+            g.setRGB(C_RED);
+            g.fillRect(x, y, TBTN, TBTN);
+            ink = C_TEXTLT;
+        }
+        g.setRGB(ink);
         if (kind == 0) {
-            g.fillRect(x + 4, y + 9, 10, 2);
+            g.fillRect(x + 4, y + 12, 10, 2);
         } else if (kind == 1) {
-            g.fillRect(x + 4, y + 3, 10, 8);
-            g.setRGB(C_FACE);
-            g.fillRect(x + 5, y + 5, 8, 5);
+            g.fillRect(x + 4, y + 4, 10, 2);
+            g.fillRect(x + 4, y + 12, 10, 2);
+            g.fillRect(x + 4, y + 4, 2, 10);
+            g.fillRect(x + 12, y + 4, 2, 10);
         } else {
             int k = 0;
-            while (k < 7) {
-                g.fillRect(x + 5 + k, y + 3 + k, 2, 2);
-                g.fillRect(x + 11 - k, y + 3 + k, 2, 2);
+            while (k < 8) {
+                g.fillRect(x + 5 + k, y + 5 + k, 2, 2);
+                g.fillRect(x + 12 - k, y + 5 + k, 2, 2);
                 k = k + 1;
             }
         }
@@ -965,7 +1017,10 @@ public class Boot {
 
     // ---- menu bar / dropdown / taskbar -----------------------------------
     static void drawMenuBar() {
-        panel(0, 0, SCR_W, MENU_H, C_FACE, 1);
+        g.setRGB(C_FACE);
+        g.fillRect(0, 0, SCR_W, MENU_H);
+        g.setRGB(C_SHADOW);
+        g.fillRect(0, MENU_H - 1, SCR_W, 1);
         drawMenuTitle("File", 0);
         drawMenuTitle("View", 1);
         drawMenuTitle("Help", 2);
@@ -987,8 +1042,10 @@ public class Boot {
         int x = menuX(menuOpen);
         int n = menuItems(menuOpen);
         int h = n * 20 + 6;
-        dropShadow(x, MENU_H, 180, h);
-        panel(x, MENU_H, 180, h, C_FACE, 1);
+        softShadow(x, MENU_H, 180, h);
+        g.setRGB(C_FACE);
+        g.fillRect(x, MENU_H, 180, h);
+        bevel(x, MENU_H, 180, h, 0);
         if (menuOpen == 0) {
             dropItem("Open All Windows", x, 0);
             dropItem("Close Active Window", x, 1);
@@ -1013,27 +1070,38 @@ public class Boot {
         g.drawString(s, x + 10, y + 2);
     }
 
+    // Dark bar, flat items, a 2px accent rule over the active one instead of
+    // a pushed-in bevel.
     static void drawTaskbar() {
-        panel(0, TASK_Y, SCR_W, TASK_H, C_FACE, 1);
+        g.setRGB(C_DESK2);
+        g.fillRect(0, TASK_Y, SCR_W, TASK_H);
+        g.setRGB(C_TITLE_A);
+        g.fillRect(0, TASK_Y, SCR_W, 1);
+
         int bx = 8;
         int i = 0;
         while (i < WIN_COUNT) {
             if (wOpen[i] == 1) {
-                int raised = 1;
-                if (wMin[i] == 0 && zorder[WIN_COUNT - 1] == i) raised = 0;
-                panel(bx, TASK_Y + 4, 150, TASK_H - 8, C_FACE, raised);
-                g.setRGB(C_TEXT);
-                g.drawString(winTitle(i), bx + 8 + (1 - raised), TASK_Y + 8 + (1 - raised));
+                boolean front = wMin[i] == 0 && zorder[WIN_COUNT - 1] == i;
+                if (front) {
+                    g.setRGB(0x00263445);
+                    g.fillRect(bx, TASK_Y + 1, 150, TASK_H - 1);
+                    g.setRGB(C_SEL);
+                    g.fillRect(bx, TASK_Y + 1, 150, 2);
+                    g.setRGB(C_TEXTLT);
+                } else {
+                    g.setRGB(C_MUTED);
+                }
+                g.drawString(winTitle(i), bx + 10, TASK_Y + (TASK_H - CH_H) / 2);
                 bx = bx + 156;
             }
             i = i + 1;
         }
-        drawClock(SCR_W - 96, TASK_Y + 6);
+        drawClock(SCR_W - 90, TASK_Y + (TASK_H - CH_H) / 2);
     }
 
     static void drawClock(int x, int y) {
-        panel(x - 6, TASK_Y + 4, 92, TASK_H - 8, C_FACE, 0);
-        g.setRGB(C_TEXT);
+        g.setRGB(C_TEXTLT);
         int h = Calendar.get(Calendar.HOUR);
         int m = Calendar.get(Calendar.MINUTE);
         int s = Calendar.get(Calendar.SECOND);
@@ -1090,18 +1158,15 @@ public class Boot {
     // ======================================================================
     // WIDGET PRIMITIVES
     // ======================================================================
+    // A flat 1px outline. "raised" no longer means a 3D bevel, only how strong
+    // the hairline is, so every existing call site keeps working unchanged.
     static void bevel(int x, int y, int w, int h, int raised) {
-        int tl = C_LIGHT;
-        int br = C_SHADOW;
-        if (raised == 0) {
-            tl = C_SHADOW;
-            br = C_LIGHT;
-        }
-        g.setRGB(tl);
+        int line = C_SHADOW;
+        if (raised == 0) line = C_LINE2;
+        g.setRGB(line);
         g.fillRect(x, y, w, 1);
-        g.fillRect(x, y, 1, h);
-        g.setRGB(br);
         g.fillRect(x, y + h - 1, w, 1);
+        g.fillRect(x, y, 1, h);
         g.fillRect(x + w - 1, y, 1, h);
     }
 
@@ -1112,18 +1177,30 @@ public class Boot {
     }
 
     // nch = number of characters, used to centre without String.length()
+    // Flat button: filled surface, hairline border, accent fill while pressed.
+    // Nothing shifts by a pixel on press, that is a 3D-bevel idiom.
     static void button(int x, int y, int w, int h, String label, int nch, int down) {
-        int raised = 1;
-        if (down == 1) raised = 0;
-        panel(x, y, w, h, C_FACE, raised);
-        g.setRGB(C_TEXT);
-        g.drawString(label, x + (w - nch * CH_W) / 2 + down, y + (h - CH_H) / 2 + down);
+        int fill = C_SURF2;
+        int ink = C_TEXT;
+        if (down == 1) {
+            fill = C_SEL;
+            ink = C_TEXTLT;
+        }
+        g.setRGB(fill);
+        g.fillRect(x, y, w, h);
+        bevel(x, y, w, h, 0);
+        g.setRGB(ink);
+        g.drawString(label, x + (w - nch * CH_W) / 2, y + (h - CH_H) / 2);
     }
 
     static void checkbox(int x, int y, String label, int on) {
-        panel(x, y, 14, 14, C_FIELD, 0);
+        int box = C_FIELD;
+        if (on == 1) box = C_SEL;
+        g.setRGB(box);
+        g.fillRect(x, y, 14, 14);
+        bevel(x, y, 14, 14, 0);
         if (on == 1) {
-            g.setRGB(C_TEXT);
+            g.setRGB(C_TEXTLT);
             int k = 0;
             while (k < 5) {
                 g.fillRect(x + 3 + k, y + 6 + k, 2, 2);
@@ -1140,9 +1217,17 @@ public class Boot {
     }
 
     static void radio(int x, int y, String label, int on) {
-        panel(x, y, 14, 14, C_FIELD, 0);
+        g.setRGB(C_FIELD);
+        g.fillRect(x, y, 14, 14);
+        bevel(x, y, 14, 14, 0);
+        // knock the corners out so a 14px square reads as a circle
+        g.setRGB(C_FACE);
+        g.fillRect(x, y, 1, 1);
+        g.fillRect(x + 13, y, 1, 1);
+        g.fillRect(x, y + 13, 1, 1);
+        g.fillRect(x + 13, y + 13, 1, 1);
         if (on == 1) {
-            g.setRGB(C_TEXT);
+            g.setRGB(C_SEL);
             g.fillRect(x + 5, y + 4, 4, 6);
             g.fillRect(x + 4, y + 5, 6, 4);
         }
@@ -1151,18 +1236,26 @@ public class Boot {
     }
 
     static void progressBar(int x, int y, int w, int pct) {
-        panel(x, y, w, 18, C_FIELD, 0);
-        int fill = (w - 4) * pct / 100;
+        g.setRGB(C_SURF2);
+        g.fillRect(x, y, w, 18);
+        int fill = (w - 2) * pct / 100;
         if (fill < 0) fill = 0;
-        if (fill > w - 4) fill = w - 4;
-        g.setRGB(C_GREEN);
-        g.fillRect(x + 2, y + 2, fill, 14);
+        if (fill > w - 2) fill = w - 2;
+        g.setRGB(C_SEL);
+        g.fillRect(x + 1, y + 1, fill, 16);
+        bevel(x, y, w, 18, 0);
     }
 
     // Text input. The buffer is drawn character by character because
     // drawString only works on constant-pool literals.
     static void textField(int x, int y, int w) {
-        panel(x, y, w, 22, C_FIELD, 0);
+        g.setRGB(C_FIELD);
+        g.fillRect(x, y, w, 22);
+        if (fieldFocus == 1) g.setRGB(C_SEL); else g.setRGB(C_LINE2);
+        g.fillRect(x, y, w, 1);
+        g.fillRect(x, y + 21, w, 1);
+        g.fillRect(x, y, 1, 22);
+        g.fillRect(x + w - 1, y, 1, 22);
         g.setRGB(C_TEXT);
         int i = 0;
         int cx = x + 4;
@@ -1195,12 +1288,14 @@ public class Boot {
         g.drawString(s, x, y);
     }
 
+    // No sunken frame around the group: a caption over a short accent rule
+    // separates things just as clearly and keeps the surface calm.
     static void groupBox(int x, int y, int w, int h, String title) {
-        bevel(x, y + 7, w, h - 7, 0);
-        g.setRGB(C_FACE);
-        g.fillRect(x + 8, y, w - 16, 14);
         g.setRGB(C_TITLE_A);
-        g.drawString(title, x + 12, y - 1);
+        g.drawString(title, x + 2, y);
+        g.fillRect(x + 2, y + 18, 28, 2);
+        g.setRGB(C_SHADOW);
+        g.fillRect(x + 32, y + 19, w - 34, 1);
     }
 
     // ======================================================================
