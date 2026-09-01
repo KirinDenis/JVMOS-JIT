@@ -17,11 +17,17 @@
  */
 #include "wasm.h"
 #include "guest_module.h"
+#include "images.h"
 
 /* Kernel entry points, cdecl, from boot/sys_api.asm and boot/font.asm. */
 extern void sys_set_color(int rgb);
 extern void sys_fill_rect(int x, int y, int w, int h);
 extern void draw_char_vram(int ch, int x, int y, int color);
+
+/* Framebuffer state, for blitting pictures without a syscall per pixel. */
+extern unsigned char *vram_back_buffer;
+extern int g_pitch;
+extern int clip_x, clip_y, clip_x2, clip_y2;
 
 #define KEY_SLOTS 16
 
@@ -99,6 +105,58 @@ static int hf_draw_int(int *a, int n, void *user)
     return 0;
 }
 
+/*
+ * Draws one of the pictures the kernel carries. The guest names a picture by
+ * index and never touches the pixels, the same way a program asks the system
+ * for a font rather than being handed the glyph memory.
+ *
+ * Going through fill_rect would mean 25000 calls across the sandbox boundary
+ * for a single image, so the copy happens here, straight into the back buffer,
+ * clipped to both the window and the active clip rectangle.
+ */
+static int hf_draw_image(int *a, int n, void *user)
+{
+    const image_asset *im;
+    unsigned char *base;
+    int index, dx, dy, scale, sy, ky, sx, kx;
+    int x_lo, x_hi, y_lo, y_hi, py, px;
+    (void)user;
+    if (n < 4) return 0;
+
+    index = a[0]; dx = a[1]; dy = a[2]; scale = a[3];
+    if (index < 0 || index >= IMAGE_COUNT) return 0;
+    if (scale < 1) scale = 1;
+    if (scale > 8) scale = 8;
+    im = &g_images[index];
+    base = vram_back_buffer;
+
+    /* visible range: window and clip rectangle, whichever is tighter */
+    x_lo = g_ox; if (clip_x > x_lo) x_lo = clip_x;
+    y_lo = g_oy; if (clip_y > y_lo) y_lo = clip_y;
+    x_hi = g_ox + g_ow; if (clip_x2 < x_hi) x_hi = clip_x2;
+    y_hi = g_oy + g_oh; if (clip_y2 < y_hi) y_hi = clip_y2;
+
+    for (sy = 0; sy < (int)im->height; sy++) {
+        const unsigned char *srow = im->pixels + sy * im->width;
+        for (ky = 0; ky < scale; ky++) {
+            unsigned int *row;
+            py = g_oy + dy + sy * scale + ky;
+            if (py < y_lo || py >= y_hi) continue;
+            row = (unsigned int *)(base + py * g_pitch);
+            for (sx = 0; sx < (int)im->width; sx++) {
+                unsigned int color = im->palette[srow[sx]] | 0xFF000000u;
+                int xs = g_ox + dx + sx * scale;
+                for (kx = 0; kx < scale; kx++) {
+                    px = xs + kx;
+                    if (px < x_lo || px >= x_hi) continue;
+                    row[px] = color;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static int hf_width(int *a, int n, void *user)  { (void)a; (void)n; (void)user; return g_ow; }
 static int hf_height(int *a, int n, void *user) { (void)a; (void)n; (void)user; return g_oh; }
 
@@ -116,6 +174,7 @@ static const wasm_host_entry g_hosts[] = {
     { "env", "set_color", hf_set_color },
     { "env", "fill_rect", hf_fill_rect },
     { "env", "draw_int",  hf_draw_int  },
+    { "env", "draw_image", hf_draw_image },
     { "env", "width",     hf_width     },
     { "env", "height",    hf_height    },
     { "env", "key",       hf_key       }

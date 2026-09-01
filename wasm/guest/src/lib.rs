@@ -29,6 +29,8 @@ extern "C" {
     fn width() -> i32;
     fn height() -> i32;
     fn draw_int(value: i32, x: i32, y: i32);
+    /// Draws one of the pictures the host carries, by index.
+    fn draw_image(index: i32, x: i32, y: i32, scale: i32);
     /// Returns a pending key, or 0. Codes are assigned by the host below.
     fn key() -> i32;
 }
@@ -43,6 +45,16 @@ const K_RIGHT: i32 = 4;
 const K_RESTART: i32 = 5;
 const K_NEXT: i32 = 6;
 const K_PREV: i32 = 7;
+const K_GALLERY: i32 = 8;
+
+const IMAGE_COUNT: i32 = 5;
+const IMAGE_W: i32 = 200;
+const IMAGE_H: i32 = 125;
+
+// 0 = artwork, 1 = playing. The game opens on the title picture, as the
+// original does with intro_image().
+const SCREEN_ART: i32 = 0;
+const SCREEN_GAME: i32 = 1;
 
 const STRIDE: usize = 32;
 const ROWS: usize = 24;
@@ -81,6 +93,8 @@ static mut TOTAL: i32 = 0;
 static mut ON_GOAL: i32 = 0;
 static mut SOLVED: i32 = 0;
 static mut STARTED: i32 = 0;
+static mut SCREEN: i32 = SCREEN_ART;
+static mut IMAGE: i32 = 0;
 
 /// Byte range of level `n` inside LEVELS, which stores maps separated by ";".
 fn level_bounds(n: i32) -> (usize, usize) {
@@ -231,7 +245,27 @@ unsafe fn go(delta: i32) {
     load(n);
 }
 
+unsafe fn handle_art(k: i32) {
+    if k == K_NEXT || k == K_RIGHT {
+        IMAGE += 1;
+        if IMAGE >= IMAGE_COUNT {
+            IMAGE = 0;
+        }
+    } else if k == K_PREV || k == K_LEFT {
+        IMAGE -= 1;
+        if IMAGE < 0 {
+            IMAGE = IMAGE_COUNT - 1;
+        }
+    } else {
+        SCREEN = SCREEN_GAME;
+    }
+}
+
 unsafe fn handle(k: i32) {
+    if k == K_GALLERY {
+        SCREEN = SCREEN_ART;
+        return;
+    }
     if k == K_UP {
         step(0, -1);
     } else if k == K_DOWN {
@@ -311,6 +345,31 @@ unsafe fn draw_board(ox: i32, oy: i32, ts: i32) {
     draw_hero(ox + HERO_X * ts, oy + HERO_Y * ts, ts);
 }
 
+/// The artwork screen: one picture, scaled to whole pixels so the original
+/// pixel art stays crisp instead of being resampled.
+unsafe fn draw_art(w: i32, h: i32) {
+    let mut scale = w / IMAGE_W;
+    let vertical = h / IMAGE_H;
+    if vertical < scale {
+        scale = vertical;
+    }
+    if scale < 1 {
+        scale = 1;
+    }
+    if scale > 4 {
+        scale = 4;
+    }
+    draw_image(
+        IMAGE,
+        (w - IMAGE_W * scale) / 2,
+        (h - IMAGE_H * scale) / 2,
+        scale,
+    );
+    set_color(C_ACCENT);
+    draw_int(IMAGE + 1, 0, 0);
+    draw_int(IMAGE_COUNT, 32, 0);
+}
+
 /// One frame: consume any pending key, then repaint. Called by the host.
 #[no_mangle]
 pub extern "C" fn frame() {
@@ -322,13 +381,24 @@ pub extern "C" fn frame() {
 
         let mut k = key();
         while k != K_NONE {
-            handle(k);
+            if SCREEN == SCREEN_ART {
+                handle_art(k);
+            } else {
+                handle(k);
+            }
             k = key();
         }
 
         let w = width();
         let h = height();
-        if w <= 0 || h <= 0 || COLS <= 0 || ROWS_USED <= 0 {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        if SCREEN == SCREEN_ART {
+            draw_art(w, h);
+            return;
+        }
+        if COLS <= 0 || ROWS_USED <= 0 {
             return;
         }
 

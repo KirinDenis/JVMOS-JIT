@@ -1606,6 +1606,8 @@ public class Boot {
         else if (code == 114) k = 5;          // R
         else if (code == 110) k = 6;          // N
         else if (code == 112) k = 7;          // P
+        else if (code == 105) k = 8;          // I, back to the artwork
+        else if (code >= 32) k = 9;           // anything else dismisses the title
         if (k != 0) Native.sys(Native.SYS_WASM_KEY, k, 0, 0, 0);
         paint();
     }
@@ -1623,7 +1625,7 @@ public class Boot {
         g.drawString("Pushes", x + 184, y + 22);
         g.drawString("Done", x + 288, y + 22);
         g.setRGB(C_DARK);
-        g.drawString("Arrows move   R restart   N next   P previous", x, y + 40);
+        g.drawString("Arrows move   R restart   N/P level   I artwork", x, y + 40);
 
         int r = Native.sys(Native.SYS_WASM_DRAW, x, y + 58, w, h - 58);
         if (r < 0) {
