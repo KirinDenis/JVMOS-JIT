@@ -1620,6 +1620,9 @@ public class Boot {
         g.setRGB(C_DARK);
         g.drawString("Arrows move   R restart   N/P level   I artwork", x, y + 40);
 
+        // The guest keeps its own sound flag, so the desktop setting is pushed
+        // in before every frame rather than being queried from inside.
+        Native.sys(Native.SYS_WASM_SOUND, chkSound, 0, 0, 0);
         int r = Native.sys(Native.SYS_WASM_DRAW, x, y + 58, w, h - 58);
         if (r < 0) {
             g.setRGB(C_RED);

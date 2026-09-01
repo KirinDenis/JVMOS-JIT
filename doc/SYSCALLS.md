@@ -52,6 +52,7 @@ method up by name.
 | 32 | `SYS_C_SELFTEST` | | `0x5741534D` if the C objects linked |
 | 33 | `SYS_WASM_DRAW` | a, b, c, d = x, y, w, h | 1, or a negated error code |
 | 34 | `SYS_WASM_KEY` | a = key code | |
+| 35 | `SYS_WASM_SOUND` | a = 1 on, 0 off | |
 
 The network calls target an RTL8139. That card is not emulated by v86, which
 provides an NE2000, so those three are dead code in a browser.

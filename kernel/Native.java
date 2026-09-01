@@ -59,6 +59,7 @@ public class Native {
     public static final int SYS_C_SELFTEST       = 32; // Comprueba que el codigo C esta enlazado
     public static final int SYS_WASM_DRAW        = 33; // Ejecuta un fotograma del invitado WebAssembly
     public static final int SYS_WASM_KEY         = 34; // Encola una tecla para el invitado
+    public static final int SYS_WASM_SOUND       = 35; // Activa o silencia el sonido del invitado
     public static final int SYS_STR_BYTE         = 30; // Byte i-esimo de un literal de cadena
 
 

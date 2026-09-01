@@ -23,6 +23,8 @@
 extern void sys_set_color(int rgb);
 extern void sys_fill_rect(int x, int y, int w, int h);
 extern void draw_char_vram(int ch, int x, int y, int color);
+extern void sys_beep(int hz);
+extern void sys_sleep(int ms);
 
 /* Framebuffer state, for blitting pictures without a syscall per pixel. */
 extern unsigned char *vram_back_buffer;
@@ -160,6 +162,18 @@ static int hf_draw_image(int *a, int n, void *user)
 static int hf_width(int *a, int n, void *user)  { (void)a; (void)n; (void)user; return g_ow; }
 static int hf_height(int *a, int n, void *user) { (void)a; (void)n; (void)user; return g_oh; }
 
+/* PC speaker. This blocks for the duration of the note, exactly as the Java
+   side does: there is no scheduler to play it in the background. */
+static int hf_beep(int *a, int n, void *user)
+{
+    (void)user;
+    if (n < 2) return 0;
+    sys_beep(a[0]);
+    sys_sleep(a[1]);
+    sys_beep(0);
+    return 0;
+}
+
 static int hf_key(int *a, int n, void *user)
 {
     int k;
@@ -177,8 +191,18 @@ static const wasm_host_entry g_hosts[] = {
     { "env", "draw_image", hf_draw_image },
     { "env", "width",     hf_width     },
     { "env", "height",    hf_height    },
-    { "env", "key",       hf_key       }
+    { "env", "key",       hf_key       },
+    { "env", "beep",      hf_beep      }
 };
+
+/* The desktop owns the sound setting, so it is pushed into the guest. */
+void wasm_set_sound(int on)
+{
+    int args[1];
+    if (!g_loaded || g_failed) return;
+    args[0] = on;
+    wasm_call(&g_mod, "set_sound", args, 1, 0);
+}
 
 /* Called from the desktop's key handler; codes are the guest's own small set. */
 void wasm_push_key(int code)

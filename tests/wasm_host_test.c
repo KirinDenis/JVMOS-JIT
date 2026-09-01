@@ -24,6 +24,7 @@ static wasm_module g_mod;          /* ~14KB, kept off the stack */
 
 static int g_rects;
 static int g_imgs;
+static int g_beeps;
 static int g_ints[32];
 static int g_nints;
 static int g_pending_key;
@@ -37,6 +38,7 @@ static int host_width(int *a, int n, void *u)  { (void)a; (void)n; (void)u; retu
 static int host_height(int *a, int n, void *u) { (void)a; (void)n; (void)u; return 240; }
 static int host_ticks(int *a, int n, void *u)  { (void)a; (void)n; (void)u; return 1000; }
 static int host_draw_image(int *a, int n, void *u) { (void)a; (void)n; (void)u; g_imgs++; return 0; }
+static int host_beep(int *a, int n, void *u) { (void)a; (void)n; (void)u; g_beeps++; return 0; }
 
 /* The guest reports its state through draw_int, so capturing those calls is
    enough to observe the game without any other instrumentation. */
@@ -66,6 +68,7 @@ static const wasm_host_entry g_hosts[] = {
     { "env", "ticks",     host_ticks     },
     { "env", "draw_int",  host_draw_int  },
     { "env", "draw_image", host_draw_image },
+    { "env", "beep",      host_beep      },
     { "env", "key",       host_key       }
 };
 
@@ -96,12 +99,13 @@ static int run_game(int argc, char **argv)
         g_pending_key = (i == 2) ? 0 : atoi(argv[i]);
         g_rects = 0;
         g_imgs = 0;
+        g_beeps = 0;
         g_nints = 0;
         e = wasm_call(&g_mod, "frame", 0, 0, 0);
         if (e != WASM_OK) { printf("ERR %s\n", wasm_strerror(e)); return 1; }
     }
 
-    printf("RECTS %d IMGS %d INTS", g_rects, g_imgs);
+    printf("RECTS %d IMGS %d BEEPS %d INTS", g_rects, g_imgs, g_beeps);
     for (i = 0; i < g_nints; i++) printf(" %d", g_ints[i]);
     printf("\n");
     return 0;

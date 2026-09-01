@@ -52,8 +52,15 @@ A guest imports these from module `env`:
 | `draw_image(index, x, y, scale)` | one of the pictures the kernel carries |
 | `width()`, `height()` | size of the window the guest was given |
 | `key()` | next pending key, or 0 |
+| `beep(hz, ms)` | a tone on the PC speaker, then silence |
 
-Exports: `frame()`, called once per repaint.
+Exports: `frame()`, called once per repaint, and `set_sound(on)`, which the
+desktop pushes in so the guest follows the "Sound enabled" setting.
+
+`beep` blocks for the length of the note, exactly as the Java side does: there
+is no scheduler to play it in the background. v86 emulates a Sound Blaster 16,
+so real sampled audio is possible, but the kernel only drives the PC speaker
+today.
 
 The guest draws in its own coordinate space starting at 0,0. The host
 translates into the window and clamps. Keys use a small explicit set

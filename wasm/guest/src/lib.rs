@@ -33,6 +33,8 @@ extern "C" {
     fn draw_image(index: i32, x: i32, y: i32, scale: i32);
     /// Returns a pending key, or 0. Codes are assigned by the host below.
     fn key() -> i32;
+    /// PC speaker: a tone of the given pitch for the given time, then silence.
+    fn beep(hz: i32, ms: i32);
 }
 
 // Key codes agreed with the host, deliberately small and explicit rather than
@@ -63,17 +65,19 @@ const LEVEL_COUNT: i32 = 61;
 
 const LEVELS: &str = include_str!("levels.txt");
 
-// Colours match the desktop palette so the guest does not look pasted in.
-const C_FLOOR: i32 = 0x0020_2830;
-const C_WALL: i32 = 0x0080_6040;
-const C_WALL_LIT: i32 = 0x00A8_8860;
-const C_WALL_DARK: i32 = 0x0050_3820;
-const C_GOAL: i32 = 0x00C0_5050;
-const C_CRATE: i32 = 0x00B0_8838;
-const C_CRATE_OK: i32 = 0x0058_B058;
-const C_CRATE_EDGE: i32 = 0x0040_2808;
-const C_HERO_HEAD: i32 = 0x00FF_D070;
-const C_HERO_BODY: i32 = 0x002C_6CC0;
+// The palette of the original terminal version, copied from its view.rs, so
+// the board looks the way it did there rather than like the surrounding
+// desktop. In the terminal each cell was five characters wide and two tall,
+// filled with a background colour and decorated with box-drawing glyphs; here
+// the same shapes are rectangles, keeping the 5:4 cell proportion.
+const C_FLOOR: i32 = 0x00D8_FDB8; // 216,253,184 light green
+const C_WALL: i32 = 0x0055_55FF; // 85,85,255 blue
+const C_GOAL: i32 = 0x00C2_1460; // 194,20,96 pink outline on the floor
+const C_CRATE: i32 = 0x00FF_BE00; // 255,190,0 amber
+const C_CRATE_OK: i32 = 0x00FF_7D00; // 255,125,0 orange once on a goal
+const C_CRATE_EDGE: i32 = 0x0034_7B98; // 52,123,152 blue frame of a crate
+const C_HERO_BODY: i32 = 0x00FF_4100; // 255,65,0 orange red
+const C_HERO_HEAD: i32 = 0x00D8_FDB8; // the hero is drawn in the floor colour
 const C_TEXT: i32 = 0x0023_2629;
 const C_ACCENT: i32 = 0x0014_606B;
 const C_DONE: i32 = 0x002E_7D4F;
@@ -94,6 +98,7 @@ static mut ON_GOAL: i32 = 0;
 static mut SOLVED: i32 = 0;
 static mut STARTED: i32 = 0;
 static mut SCREEN: i32 = SCREEN_ART;
+static mut SOUND: i32 = 1;
 static mut IMAGE: i32 = 0;
 
 /// Byte range of level `n` inside LEVELS, which stores maps separated by ";".
@@ -198,6 +203,12 @@ unsafe fn count_goals() {
     SOLVED = if TOTAL > 0 && on == TOTAL { 1 } else { 0 };
 }
 
+unsafe fn tone(hz: i32, ms: i32) {
+    if SOUND == 1 {
+        beep(hz, ms);
+    }
+}
+
 unsafe fn step(dx: i32, dy: i32) {
     if SOLVED == 1 {
         return;
@@ -209,6 +220,7 @@ unsafe fn step(dx: i32, dy: i32) {
     }
     let at = ny as usize * STRIDE + nx as usize;
     if WALL[at] == 1 {
+        tone(150, 55);
         return;
     }
 
@@ -216,21 +228,31 @@ unsafe fn step(dx: i32, dy: i32) {
         let bx = nx + dx;
         let by = ny + dy;
         if bx < 0 || by < 0 || bx >= STRIDE as i32 || by >= ROWS as i32 {
+            tone(150, 55);
             return;
         }
         let behind = by as usize * STRIDE + bx as usize;
         if WALL[behind] == 1 || CRATE[behind] == 1 {
+            tone(150, 55);
             return;
         }
         CRATE[at] = 0;
         CRATE[behind] = 1;
         PUSHES += 1;
+        tone(520, 34);
+    } else {
+        tone(1500, 9);
     }
 
     HERO_X = nx;
     HERO_Y = ny;
     MOVES += 1;
     count_goals();
+    if SOLVED == 1 {
+        tone(784, 110);
+        tone(988, 110);
+        tone(1319, 300);
+    }
 }
 
 unsafe fn go(delta: i32) {
@@ -283,66 +305,81 @@ unsafe fn handle(k: i32) {
     }
 }
 
-unsafe fn draw_crate(px: i32, py: i32, ts: i32, on_goal: bool) {
+/// The box-drawing frame the terminal version puts inside a cell: it spans the
+/// middle three of the five character columns, both rows tall.
+unsafe fn draw_frame(px: i32, py: i32, cw: i32, ch: i32, colour: i32, thick: i32) {
+    let inset = cw / 5;
+    let x0 = px + inset;
+    let w = cw - inset * 2;
+    let y0 = py + thick;
+    let h = ch - thick * 2;
+    if w <= thick * 2 || h <= thick * 2 {
+        return;
+    }
+    set_color(colour);
+    fill_rect(x0, y0, w, thick);
+    fill_rect(x0, y0 + h - thick, w, thick);
+    fill_rect(x0, y0, thick, h);
+    fill_rect(x0 + w - thick, y0, thick, h);
+}
+
+unsafe fn draw_crate(px: i32, py: i32, cw: i32, ch: i32, on_goal: bool) {
     set_color(if on_goal { C_CRATE_OK } else { C_CRATE });
-    fill_rect(px + 1, py + 1, ts - 2, ts - 2);
-    set_color(C_CRATE_EDGE);
-    fill_rect(px + 1, py + 1, ts - 2, 1);
-    fill_rect(px + 1, py + ts - 2, ts - 2, 1);
-    fill_rect(px + 1, py + 1, 1, ts - 2);
-    fill_rect(px + ts - 2, py + 1, 1, ts - 2);
-    if ts >= 12 {
-        fill_rect(px + 3, py + ts / 2 - 1, ts - 6, 2);
-        fill_rect(px + ts / 2 - 1, py + 3, 2, ts - 6);
+    fill_rect(px, py, cw, ch);
+    // a double line in the original, so the frame is drawn twice
+    let t = if cw >= 20 { 2 } else { 1 };
+    draw_frame(px, py, cw, ch, C_CRATE_EDGE, t);
+}
+
+/// The hero is a framed box with a diagonal stroke on either side.
+unsafe fn draw_hero(px: i32, py: i32, cw: i32, ch: i32) {
+    set_color(C_HERO_BODY);
+    fill_rect(px, py, cw, ch);
+    let t = if cw >= 20 { 2 } else { 1 };
+    draw_frame(px, py, cw, ch, C_HERO_HEAD, t);
+
+    let inset = cw / 5;
+    if inset >= 3 {
+        set_color(C_HERO_HEAD);
+        let steps = ch - t * 2;
+        let mut i = 0;
+        while i < steps {
+            let dx = i * inset / steps;
+            fill_rect(px + inset - 1 - dx, py + t + i, t, 1);
+            fill_rect(px + cw - inset + dx, py + t + i, t, 1);
+            i += 1;
+        }
     }
 }
 
-unsafe fn draw_hero(px: i32, py: i32, ts: i32) {
-    let cx = px + ts / 2;
-    set_color(C_HERO_HEAD);
-    fill_rect(cx - 3, py + 2, 6, 5);
-    if ts >= 10 {
-        set_color(C_HERO_BODY);
-        fill_rect(cx - 4, py + 7, 8, ts - 10);
-    }
-}
-
-unsafe fn draw_board(ox: i32, oy: i32, ts: i32) {
+unsafe fn draw_board(ox: i32, oy: i32, cw: i32, ch: i32) {
     // The floor goes down as one rectangle rather than one per cell. Every
     // rectangle is a call across the sandbox boundary into the interpreter, so
-    // the cheapest drawing is the drawing that never happens: this alone cuts
-    // the calls per frame roughly in half.
+    // the cheapest drawing is the drawing that never happens.
     set_color(C_FLOOR);
-    fill_rect(ox, oy, COLS * ts, ROWS_USED * ts);
+    fill_rect(ox, oy, COLS * cw, ROWS_USED * ch);
 
     let mut r = 0i32;
     while r < ROWS_USED {
         let mut c = 0i32;
         while c < COLS {
             let at = r as usize * STRIDE + c as usize;
-            let px = ox + c * ts;
-            let py = oy + r * ts;
+            let px = ox + c * cw;
+            let py = oy + r * ch;
             if WALL[at] == 1 {
                 set_color(C_WALL);
-                fill_rect(px, py, ts, ts);
-                set_color(C_WALL_LIT);
-                fill_rect(px, py, ts - 1, 1);
-                fill_rect(px, py, 1, ts - 1);
-                set_color(C_WALL_DARK);
-                fill_rect(px, py + ts - 1, ts, 1);
-                fill_rect(px + ts - 1, py, 1, ts);
+                fill_rect(px, py, cw, ch);
             } else if GOAL[at] == 1 && CRATE[at] == 0 {
-                set_color(C_GOAL);
-                fill_rect(px + ts / 2 - 2, py + ts / 2 - 2, 5, 5);
+                draw_frame(px, py, cw, ch, C_GOAL, 1);
             }
             if CRATE[at] == 1 {
-                draw_crate(px, py, ts, GOAL[at] == 1);
+                draw_crate(px, py, cw, ch, GOAL[at] == 1);
             }
             c += 1;
         }
         r += 1;
     }
-    draw_hero(ox + HERO_X * ts, oy + HERO_Y * ts, ts);
+    draw_hero(ox + HERO_X * cw, oy + HERO_Y * ch, cw, ch);
 }
 
 /// The artwork screen: one picture, scaled to whole pixels so the original
@@ -412,19 +449,31 @@ pub extern "C" fn frame() {
         draw_int(ON_GOAL, 288, 0);
         draw_int(TOTAL, 320, 0);
 
+        // A cell was 5 characters by 2 in the terminal, and the font is 8 by 16,
+        // so the proportion to keep is 5:4.
         let top = 22;
-        let mut ts = (w - 4) / COLS;
-        let vertical = (h - top - 4) / ROWS_USED;
-        if vertical < ts {
-            ts = vertical;
+        let mut k = (w - 4) / (5 * COLS);
+        let vertical = (h - top - 4) / (4 * ROWS_USED);
+        if vertical < k {
+            k = vertical;
         }
-        if ts > 26 {
-            ts = 26;
+        if k < 1 {
+            k = 1;
         }
-        if ts < 4 {
-            ts = 4;
+        if k > 8 {
+            k = 8;
         }
-        draw_board((w - COLS * ts) / 2, top, ts);
+        let cw = 5 * k;
+        let ch = 4 * k;
+        draw_board((w - COLS * cw) / 2, top, cw, ch);
+    }
+}
+
+/// The desktop owns the sound setting; it pushes the current value in.
+#[no_mangle]
+pub extern "C" fn set_sound(on: i32) {
+    unsafe {
+        SOUND = if on != 0 { 1 } else { 0 };
     }
 }
 

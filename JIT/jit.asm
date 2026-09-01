@@ -60,7 +60,7 @@ section .text
 	extern sys_inb, sys_outb, sys_inw, sys_outw, sys_indw, sys_outdw, sys_get_ticks
 	extern sys_get_time, sys_sleep, sys_exit
 	extern c_selftest
-	extern wasm_guest_frame, wasm_push_key
+	extern wasm_guest_frame, wasm_push_key, wasm_set_sound
 
 jit_init:
     push eax
@@ -352,6 +352,8 @@ sys_native_dispatch:
     je .sys_wasm_draw
     cmp eax, 34
     je .sys_wasm_key
+    cmp eax, 35
+    je .sys_wasm_sound
 
     xor eax, eax
     jmp .done
@@ -568,6 +570,13 @@ sys_native_dispatch:
 .sys_wasm_key:
     push dword [sys_arg_a]
     call wasm_push_key
+    add esp, 4
+    xor eax, eax
+    jmp .done
+
+.sys_wasm_sound:
+    push dword [sys_arg_a]
+    call wasm_set_sound
     add esp, 4
     xor eax, eax
     jmp .done
