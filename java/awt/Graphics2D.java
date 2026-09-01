@@ -27,6 +27,13 @@ import kernel.Native;
 public class Graphics2D {
     private Color currentColor = Color.BLACK;
 
+    // Fija el color directamente desde un entero 0x00RRGGBB.
+    // Evita crear objetos Color en los bucles de dibujo: el heap es un bump
+    // allocator sin free y cada 'new' consume 4KB irrecuperables.
+    public void setRGB(int rgb) {
+        Native.sys(Native.SYS_SET_COLOR, rgb, 0, 0, 0);
+    }
+
     public void setColor(Color c) {
         if (c != null) {
             this.currentColor = c;
@@ -64,7 +71,7 @@ public class Graphics2D {
 	public int drawChar(char c, int x, int y) {
         // Syscall 15: Renderizar carácter en VRAM
         Native.sys(Native.SYS_DRAW_CHAR, x, y, (int) c, 0);
-        return x + 10; // Devuelve la siguiente posición X
+        return x + 8; // Siguiente posición X (celda de 8px, igual que drawString)
     }
 	
 	public int drawInt(int value, int x, int y) {
@@ -88,14 +95,14 @@ public class Graphics2D {
             t2 /= 10;
         }
         
-        int currX = x + (len - 1) * 10;
-        int endX = x + len * 10;
-        
+        int currX = x + (len - 1) * 8;
+        int endX = x + len * 8;
+
         temp = value;
         while (temp > 0) {
 			// Syscall 15: Renderizar carácter en VRAM
             Native.sys(Native.SYS_DRAW_CHAR, currX, y, '0' + (temp % 10), 0);
-            currX -= 10;
+            currX -= 8;
             temp /= 10;
         }
         
@@ -111,7 +118,12 @@ public class Graphics2D {
 		// Syscall 14: Leer pixel de VRAM
         return Native.sys(Native.SYS_GET_PIXEL, x, y, 0, 0);
     }
-	
+
+    public void present() {
+        // Syscall 26: copiar el buffer trasero completo a la VRAM real (doble buffer, evita el parpadeo)
+        Native.sys(Native.SYS_PRESENT, 0, 0, 0, 0);
+    }
+
 	// Faltan por añadir drawCircle, fillCircle, drawTriangle, fillTriangle, clipText, etc.
 	
 }

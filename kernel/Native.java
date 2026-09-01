@@ -51,6 +51,7 @@ public class Native {
     public static final int SYS_RTL8139_INIT     = 23; // Inicializar Tarjeta de Red
     public static final int SYS_RTL8139_SEND     = 24; // Enviar paquete de Red
     public static final int SYS_NET_RECEIVE      = 25; // Recibir paquete de Red
+    public static final int SYS_PRESENT          = 26; // Copiar buffer trasero a la VRAM real
 
 
     // FIRMAS NATIVAS

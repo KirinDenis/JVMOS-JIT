@@ -24,8 +24,8 @@
 
 global draw_char_vram
 
-extern g_framebuffer
 extern g_pitch
+extern vram_back_buffer
 
 section .rodata
 align 4
@@ -256,8 +256,8 @@ draw_char_vram:
     shl eax, 4
     add eax, g_font_8x16
 
-    ; PhysAddr = g_framebuffer + (y * pitch) + (x * 4)
-    mov edi, [g_framebuffer]
+    ; PhysAddr = vram_back_buffer + (y * pitch) + (x * 4)
+    mov edi, [vram_back_buffer]
     imul ecx, [g_pitch]
     shl ebx, 2
     add edi, ecx

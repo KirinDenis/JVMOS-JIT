@@ -235,6 +235,24 @@
     canvas.addEventListener("click", function () {
       canvas.requestPointerLock();
     });
+
+    // Switching away and back (another tab, or another window/VM entirely) drops
+    // keyboard focus and the browser force-releases pointer lock — the emulator
+    // itself keeps running (v86's CPU loop is a Worker, not throttled by a hidden
+    // tab), but input silently stops reaching it, which looks like a hang.
+    // Restore what we can automatically; pointer lock needs a fresh click
+    // (browsers require a user gesture for it).
+    function reclaimFocus() {
+      if (!emulator) return;
+      screenContainer.focus();
+      if (!document.pointerLockElement) {
+        setStatus("Welcome back — click the screen to re-capture the mouse (keyboard already restored).");
+      }
+    }
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) reclaimFocus();
+    });
+    window.addEventListener("focus", reclaimFocus);
   }
 
   startBtn.addEventListener("click", boot);

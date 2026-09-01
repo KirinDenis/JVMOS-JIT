@@ -102,9 +102,9 @@ bootjvm_start:
     ; Cachear puntero a método e inicializar JIT global
     call parse_class_structure
 
-    ; Asignar 1MB para la memoria persistente del JIT
+    ; Asignar 4MB para la memoria persistente del JIT (0x200000-0x600000)
     mov eax, 0x00200000
-    mov ebx, 1048576
+    mov ebx, 4194304
     call jit_init
 
     ; Buscar MAIN en bytecode
@@ -801,7 +801,7 @@ methods_ptr:       dd 0
 current_param_count: dd 0
 
 section .bss
-cp_offsets:        resd 1024
+cp_offsets:        resd 8192       ; una clase grande supera fácilmente 1024 entradas de CP
 
 align 4
 class_name_ptr: resd 32

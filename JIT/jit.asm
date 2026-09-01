@@ -17,8 +17,8 @@ align 16
 	fixup_addr:		 resd 1024	; donde sobreescribir métodos nativos
 	fixup_target: 	 resd 1024  ; a cual PC del bytecode apuntaba
     fixup_count:  	 resd 1     ; contador de saltos hacia adelante
-	method_cache: 	 resd 2048	; mapea [CP_Index] -> [Dirección Nativa]
-	java_static_vars: resd 4096 ; para manejar variables estáticas
+	method_cache: 	 resd 8192	; mapea [CP_Index] -> [Dirección Nativa]
+	java_static_vars: resd 8192 ; para manejar variables estáticas (indexado por CP_Index)
 
 section .data
     jit_bytecode_base: dd 0
@@ -53,7 +53,7 @@ section .text
 	extern draw_char_vram, sys_draw_string, sys_serial_puts, sys_serial_putc, sys_serial_print_java
 	extern current_color
 	extern sys_read_keyboard_scancode, sys_set_keyboard_layout, sys_read_mouse
-	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel
+	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel, sys_present
 	extern sys_beep, sys_nosound, sys_get_free_mem, sys_get_ram_size
 	extern sys_pci_read_config, sys_disk_read_sector, sys_disk_write_sector
 	extern sys_rtl8139_init, sys_rtl8139_send_packet, sys_net_receive_packet
@@ -332,6 +332,8 @@ sys_native_dispatch:
     je .sys_rtl8139_send_packet
     cmp eax, 25
     je .sys_net_receive_packet
+    cmp eax, 26
+    je .sys_present
 
     xor eax, eax
     jmp .done
@@ -519,7 +521,12 @@ sys_native_dispatch:
     push dword [sys_arg_c]
     call sys_net_receive_packet
     add esp, 8
-    jmp .done	
+    jmp .done
+
+.sys_present:
+    call sys_present
+    xor eax, eax
+    jmp .done
 
 .done:
     pop edx
@@ -562,23 +569,7 @@ jit_compile_method:
     mov edx, [jit_buffer_ptr]    
     mov [pc_map + ecx * 4], edx  
 
-	; debug
     movzx eax, byte [esi]
-	pusha
-	mov ebx, eax
-	shr ebx, 4
-	call .nibble_to_hex
-	mov [hex_byte_str], bl
-	mov ebx, eax
-	and ebx, 0x0F
-	call .nibble_to_hex
-	mov [hex_byte_str + 1], bl
-	push hex_byte_str
-	call sys_serial_puts
-	add esp, 4
-	popa
-	; fin del debug
-	movzx eax, byte [esi]
     inc esi
     mov ebx, [jit_opcode_table + eax * 4]
     call ebx

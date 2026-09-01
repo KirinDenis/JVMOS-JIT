@@ -20,741 +20,1129 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.*/
 
-/*package kernel;
-
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.lang.Thread;
-import java.awt.Toolkit;
-import java.util.Calendar;
-
-public class Boot {
-
-    public static void main(String[] args) {
-        java.lang.System.out = new java.io.PrintStream(); // INICIALIZACIÓN VITAL
-        
-        Native.sys(Native.SYS_SET_COLOR, 0x00FF0000, 0, 0, 0); 
-        Native.sys(Native.SYS_FILL_RECT, 0, 0, 1024, 768);
-        Native.sys(Native.SYS_SET_COLOR, 0x00FFFFFF, 0, 0, 0);
-        Native.sys(Native.SYS_DRAW_STRING, 50, 50, "FASE 1: Native.sys puro OK. Esperando 2 segundos...", 0);
-
-        Thread.sleep(2000);
-
-        Graphics2D g = new Graphics2D();
-        Color background = new Color(0x000000FF);
-        Color textPaint = new Color(0x00FFFF00);
-
-        g.setColor(background);
-        g.fillRect(0, 0, 1024, 768);
-
-        g.setColor(textPaint);
-        g.drawString("FASE 1-3: JIT, Heap y Graphics2D OK.", 50, 50);
-
-        // ==========================================================
-        // FASE 4: Renderizado Dinámico Baremetal 
-        // ==========================================================
-        java.lang.System.out.println("=====================================");
-        java.lang.System.out.println("[Micro-rt] Iniciando Fase 4 en el Puerto Serie (COM1)...");
-        
-        long ticks = java.lang.System.currentTimeMillis();
-        
-        g.setColor(new Color(0x00FFFFFF)); 
-        g.drawString("FASE 4: PrintStream y System.out OK.", 50, 90);
-        g.drawString("Ticks actuales del sistema: ", 50, 120);
-        g.drawInt((int)ticks, 330, 120); 
-
-        java.lang.System.out.print("Fase 4 completada. Ticks: ");
-        java.lang.System.out.println((int)ticks);
-
-        // ==========================================================
-        // FASE 5: Prueba de Hardware (RTC CMOS y PC Speaker)
-        // ==========================================================
-        int day = Calendar.get(Calendar.DAY);
-        int month = Calendar.get(Calendar.MONTH);
-        int year = Calendar.get(Calendar.YEAR);
-        int hour = Calendar.get(Calendar.HOUR);
-        int min = Calendar.get(Calendar.MINUTE);
-        
-        g.setColor(new Color(0x0000FF00)); 
-        g.drawString("FASE 5: Calendar y Toolkit OK.", 50, 160);
-        g.drawString("Reloj RTC: ", 50, 190);
-        
-        int px = 160; 
-        px = g.drawInt(day, px, 190);
-        px = g.drawChar('/', px, 190);
-        px = g.drawInt(month, px, 190);
-        px = g.drawChar('/', px, 190);
-        px = g.drawInt(20, px, 190);
-        px = g.drawInt(year, px, 190);
-        px = g.drawChar(' ', px, 190);
-        px = g.drawInt(hour, px, 190);
-        px = g.drawChar(':', px, 190);
-        px = g.drawInt(min, px, 190);
-
-        java.lang.System.out.println("Haciendo sonar el PC Speaker...");
-        
-        Toolkit.getDefaultToolkit().beep(1500); 
-        Thread.sleep(300); 
-        Native.sys(22, 0, 0, 0, 0); 
-        
-        g.setColor(new Color(0x00FF8800)); 
-        g.drawString("Todas las pruebas superadas! Interfaz Grafica lista.", 50, 240);
-        java.lang.System.out.println("Pruebas finalizadas con exito.");
-
-        while (true) {
-            Thread.sleep(1000);
-        }
-    }
-}*/
-
 package kernel;
 
-import java.awt.Color;
 import java.awt.Graphics2D;
-import java.awt.Toolkit;
 import java.util.Calendar;
 import java.io.PrintStream;
-import java.lang.Thread;
 
+/*
+ * JVMOS desktop shell.
+ *
+ * Everything lives in this single class on purpose. The JIT this runs on has
+ * some hard limits that shape the whole design:
+ *
+ *   1. Static initializers (<clinit>) are never executed, so no field may have
+ *      an initializer. Only "static final int" compile-time constants are safe
+ *      because javac inlines them at the use site. Everything else is set up
+ *      by initState().
+ *   2. Methods are resolved by NAME ONLY (the descriptor is ignored), so no
+ *      method or constructor may be overloaded anywhere.
+ *   3. Object field offsets are derived from the constant-pool index of the
+ *      field reference, so a field is only addressed consistently from inside
+ *      the class that declares it. Cross-class field access silently reads the
+ *      wrong offset -> all shared UI state is kept in flat arrays right here.
+ *   4. drawString() can only render string literals: the native side reads the
+ *      length from the two bytes preceding the constant-pool UTF-8 payload.
+ *      Anything dynamic has to be drawn character by character.
+ *   5. 'new' hands out a fixed 4KB block from a bump allocator with no free(),
+ *      so nothing may allocate inside the redraw loop.
+ */
 public class Boot {
-    
-    // ESTRUCTURA DEL SISTEMA DE ARCHIVOS (VFS)    
-    public static class Node {
-        public String name;
-        public int[] customName;
-        public int customLen;
-        public boolean isDir;
-        public Node[] children;
-        public int childCount;
-        public Node parent;
-    }
 
-    private static Node root, currentDir, selectedNode, clipboardNode, fileMenuTarget;
+    // ---- screen geometry -------------------------------------------------
+    static final int SCR_W = 1024;
+    static final int SCR_H = 768;
+    static final int CH_W = 8;          // font cell width
+    static final int CH_H = 16;         // font cell height
 
-    // MICRO-RT: Gráficos y Paleta Cacheada (Evita Memory Leaks)
-    private static Graphics2D g;
-    private static Color C_BLACK, C_WHITE, C_RED, C_GREEN, C_BLUE, C_YELLOW;
-    private static Color C_GRAY, C_LIGHT_GRAY, C_DARK_GRAY, C_TRANSPARENT;
-    private static Color C_WIN_BG, C_WIN_TITLE, C_SEL, C_FOLDER, C_FILE;
+    static final int MENU_H = 20;
+    static final int TASK_H = 28;
+    static final int TASK_Y = SCR_H - TASK_H;
+    static final int DESK_TOP = MENU_H;
+    static final int DESK_BOT = TASK_Y;
 
-    // ESTADO GLOBAL DEL ESCRITORIO
-    private static int winX, winY, winW, winH;
-    private static boolean windowOpen, windowMinimized, isDragging, isNaming;
-    private static int dragOffsetX, dragOffsetY, lastClickTick, lastUIKey;
-    private static boolean showStartMenu, showContextMenu, showAbout, showFileMenu, namingIsDir;
-    private static int contextX, contextY, fileMenuX, fileMenuY, backgroundMode, newNameLen;
-    private static int[] newNameBuf = new int[16];
+    static final int TITLE_H = 20;
+    static final int BORDER = 3;
+    static final int GRIP = 14;
+    static final int MIN_W = 260;
+    static final int MIN_H = 140;
 
-    // Cursor parpadeante de la consola de texto inicial (antes de startx)
-    private static boolean shellCursorOn = false;
-    private static int shellCursorX, shellCursorY;
+    // ---- palette (0x00RRGGBB) -------------------------------------------
+    static final int C_DESK = 0x00103060;
+    static final int C_DESK2 = 0x0017417A;
+    static final int C_FACE = 0x00C0C0C0;
+    static final int C_LIGHT = 0x00FFFFFF;
+    static final int C_DARK = 0x00868686;
+    static final int C_SHADOW = 0x00404040;
+    static final int C_TITLE_A = 0x00003C82;
+    static final int C_TITLE_B = 0x00787878;
+    static final int C_TEXT = 0x00000000;
+    static final int C_TEXTLT = 0x00FFFFFF;
+    static final int C_FIELD = 0x00FFFFFF;
+    static final int C_SEL = 0x00003C82;
+    static final int C_GREEN = 0x0000A040;
+    static final int C_RED = 0x00B02020;
+    static final int C_AMBER = 0x00E0A000;
 
+    // ---- window ids ------------------------------------------------------
+    static final int WIN_COUNT = 4;
+    static final int W_GALLERY = 0;
+    static final int W_FILES = 1;
+    static final int W_SYSTEM = 2;
+    static final int W_ABOUT = 3;
+
+    // ---- drag modes ------------------------------------------------------
+    static final int DRAG_NONE = 0;
+    static final int DRAG_MOVE = 1;
+    static final int DRAG_SIZE = 2;
+
+    // ---- runtime state (never field-initialized, see initState) ----------
+    static Graphics2D g;
+
+    static int[] wx, wy, ww, wh;        // window geometry
+    static int[] wOpen, wMin, wMax;     // window flags (0/1)
+    static int[] rx, ry, rw, rh;        // geometry saved before maximize
+    static int[] zorder;                // back-to-front window order
+
+    static int mouseX, mouseY, mouseBtn;
+    static int prevX, prevY, prevBtn;
+    static int dragMode, dragWin, dragDX, dragDY;
+    static int menuOpen;                // -1 none, else menu index
+    static int lastSecond;
+
+    // widget state for the gallery demo
+    static int chkSound, chkGrid, chkStatus;
+    static int radioSel;
+    static int progress;
+    static int listSel;
+    static int fieldFocus, fieldLen;
+    static int[] fieldBuf;
+    static int pressedBtn;              // -1 none, else button id
+    static int lastKey;
+
+    // ======================================================================
+    // ENTRY POINT
+    // ======================================================================
     public static void main(String[] args) {
-        // 1. INICIALIZACIÓN BAREMETAL DEL MICRO-RT
         java.lang.System.out = new PrintStream();
-        java.lang.System.out.println("[Boot] Inicializando subsistemas Micro-rt...");
-        
+        java.lang.System.out.println("[Boot] JVMOS desktop starting...");
+
         g = new Graphics2D();
-        initColors();
+        initState();
 
-        // 2. ARRANQUE DEL SISTEMA
-        initKeyboard();
-        dramaticBIOS();
-        shell();
+        Native.sys(Native.SYS_SET_KBD_LAYOUT, 0, 0, 0, 0);
 
-        int cursorX = 85, cursorY = 80, lastKey = 0, cmdLen = 0;
-        int[] cmdBuffer = new int[16];
-        showCursor(cursorY);
-        drawShellCursor(cursorX, cursorY);
+        splash();
+        chime();
 
+        desktopLoop();
+    }
+
+    static void initState() {
+        wx = new int[WIN_COUNT];
+        wy = new int[WIN_COUNT];
+        ww = new int[WIN_COUNT];
+        wh = new int[WIN_COUNT];
+        wOpen = new int[WIN_COUNT];
+        wMin = new int[WIN_COUNT];
+        wMax = new int[WIN_COUNT];
+        rx = new int[WIN_COUNT];
+        ry = new int[WIN_COUNT];
+        rw = new int[WIN_COUNT];
+        rh = new int[WIN_COUNT];
+        zorder = new int[WIN_COUNT];
+        fieldBuf = new int[24];
+
+        setWin(W_GALLERY, 60, 60, 520, 430);
+        setWin(W_FILES, 600, 90, 380, 330);
+        setWin(W_SYSTEM, 150, 430, 430, 250);
+        setWin(W_ABOUT, 300, 220, 420, 220);
+
+        wOpen[W_GALLERY] = 1;
+        wOpen[W_FILES] = 1;
+        wOpen[W_SYSTEM] = 1;
+        wOpen[W_ABOUT] = 0;
+
+        zorder[0] = W_SYSTEM;
+        zorder[1] = W_FILES;
+        zorder[2] = W_ABOUT;
+        zorder[3] = W_GALLERY;
+
+        mouseX = 512;
+        mouseY = 384;
+        mouseBtn = 0;
+        prevX = -1;
+        prevY = -1;
+        prevBtn = 0;
+        dragMode = DRAG_NONE;
+        dragWin = -1;
+        menuOpen = -1;
+        lastSecond = -1;
+        pressedBtn = -1;
+        lastKey = 0;
+
+        chkSound = 1;
+        chkGrid = 1;
+        chkStatus = 0;
+        radioSel = 1;
+        progress = 45;
+        listSel = 0;
+        fieldFocus = 0;
+        fieldLen = 0;
+    }
+
+    static void setWin(int i, int x, int y, int w, int h) {
+        wx[i] = x;
+        wy[i] = y;
+        ww[i] = w;
+        wh[i] = h;
+        rx[i] = x;
+        ry[i] = y;
+        rw[i] = w;
+        rh[i] = h;
+        wMin[i] = 0;
+        wMax[i] = 0;
+    }
+
+    // ======================================================================
+    // BOOT SPLASH + PC SPEAKER CHIME
+    // ======================================================================
+    static void splash() {
+        g.setRGB(0x00000000);
+        g.fillRect(0, 0, SCR_W, SCR_H);
+
+        g.setRGB(C_GREEN);
+        g.drawString("JVMOS / JIT  --  baremetal Java on x86", 40, 40);
+        g.drawString("========================================", 40, 60);
+
+        splashLine("CPU        x86 32-bit protected mode", 90);
+        splashLine("Memory     128 MB flat, no paging", 112);
+        splashLine("Video      VESA VBE 1024x768 32bpp", 134);
+        splashLine("Input      PS/2 keyboard + mouse (IRQ 1/12)", 156);
+        splashLine("Engine     bytecode -> native x86 JIT", 178);
+
+        g.setRGB(C_AMBER);
+        g.drawString("Starting desktop shell...", 40, 214);
+        g.present();
+        Native.sys(Native.SYS_SLEEP, 700, 0, 0, 0);
+    }
+
+    static void splashLine(String s, int y) {
+        g.setRGB(C_GREEN);
+        g.drawString("[ OK ]", 40, y);
+        g.setRGB(C_TEXTLT);
+        g.drawString(s, 40 + 8 * CH_W, y);
+    }
+
+    // One note. Frequencies are passed straight to the PC speaker syscall:
+    // Toolkit.beep is overloaded and this JIT resolves methods by name only,
+    // so every Toolkit.beep(n) call would land on the no-arg 1000 Hz version.
+    static void note(int hz, int ms) {
+        Native.sys(Native.SYS_BEEP, hz, 0, 0, 0);
+        Native.sys(Native.SYS_SLEEP, ms, 0, 0, 0);
+        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
+        Native.sys(Native.SYS_SLEEP, 26, 0, 0, 0);
+    }
+
+    // Straight-line, no arrays: a static final int[] would need a class
+    // initializer, and those never run here.
+    static void chime() {
+        note(523, 130);
+        note(659, 130);
+        note(784, 130);
+        note(1047, 240);
+        note(880, 130);
+        note(1047, 420);
+    }
+
+    static void clickTone() {
+        Native.sys(Native.SYS_BEEP, 1800, 0, 0, 0);
+        Native.sys(Native.SYS_SLEEP, 12, 0, 0, 0);
+        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
+    }
+
+    // ======================================================================
+    // MAIN LOOP
+    // ======================================================================
+    static void desktopLoop() {
+        paint();
         while (true) {
-            int asciiChar = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
+            mouseX = Native.sys(Native.SYS_READ_MOUSE, 0, 0, 0, 0);
+            mouseY = Native.sys(Native.SYS_READ_MOUSE, 1, 0, 0, 0);
+            mouseBtn = Native.sys(Native.SYS_READ_MOUSE, 2, 0, 0, 0);
 
-            if (asciiChar != 0 && asciiChar != lastKey) {
-                if (asciiChar == 13) {
-                    eraseShellCursor();
-                    cursorY += 25;
+            if (mouseX < 0) mouseX = 0;
+            if (mouseX > SCR_W - 1) mouseX = SCR_W - 1;
+            if (mouseY < 0) mouseY = 0;
+            if (mouseY > SCR_H - 1) mouseY = SCR_H - 1;
 
-                    if (cmdLen == 6 && cmdBuffer[0] == 's' && cmdBuffer[1] == 't' && cmdBuffer[2] == 'a' && cmdBuffer[3] == 'r' && cmdBuffer[4] == 't' && cmdBuffer[5] == 'x') {
-                        java.lang.System.out.println("[GUI] Arrancando entorno de escritorio...");
-                        runStartX();
-                        cursorY = 40;
-                    } else if (cmdLen == 3 && cmdBuffer[0] == 'v' && cmdBuffer[1] == 'e' && cmdBuffer[2] == 'r') {
-                        g.setColor(C_GREEN);
-                        g.drawString("JVMOS Kernel v2.5 (Baremetal Java x86)", 20, cursorY); cursorY += 25;
-                        g.drawString("Micro-rt Integrado - Slam 2026", 20, cursorY); cursorY += 25;
-                    } else if (cmdLen == 4 && cmdBuffer[0] == 't' && cmdBuffer[1] == 'i' && cmdBuffer[2] == 'm' && cmdBuffer[3] == 'e') {
-                        showTime(cursorY); cursorY += 25;
-                    } else if (cmdLen == 4 && cmdBuffer[0] == 'd' && cmdBuffer[1] == 'a' && cmdBuffer[2] == 't' && cmdBuffer[3] == 'e') {
-                        showDate(cursorY); cursorY += 25;
-                    } else if ((cmdLen == 5 && cmdBuffer[0] == 'c' && cmdBuffer[1] == 'l' && cmdBuffer[2] == 'e' && cmdBuffer[3] == 'a' && cmdBuffer[4] == 'r') ||
-                               (cmdLen == 3 && cmdBuffer[0] == 'c' && cmdBuffer[1] == 'l' && cmdBuffer[2] == 's')) {
-                        clearScreen();
-                        cursorY = 40;
-                    } else if (cmdLen == 4 && cmdBuffer[0] == 'h' && cmdBuffer[1] == 'e' && cmdBuffer[2] == 'l' && cmdBuffer[3] == 'p') {
-                        g.setColor(C_GREEN);
-                        g.drawString("COMANDOS: help | startx | clear | cls | ver | time | date | exit", 20, cursorY);
-                        cursorY += 25;
-                    } else if (cmdLen == 4 && cmdBuffer[0] == 'e' && cmdBuffer[1] == 'x' && cmdBuffer[2] == 'i' && cmdBuffer[3] == 't') {
-                        shutdown();
-                    } else if (cmdLen > 0) {
-                        g.setColor(C_RED);
-                        g.drawString("Error: Comando no reconocido.", 20, cursorY);
-                        Toolkit.getDefaultToolkit().beep(800); Thread.sleep(150); Toolkit.getDefaultToolkit().beep(0);
-                        cursorY += 25;
-                    }
+            handleKeys();
 
-                    for (int i = 0; i < cmdLen; i++) cmdBuffer[i] = 0;
-                    cmdLen = 0;
+            if (mouseBtn != 0 && prevBtn == 0) onPress();
+            if (mouseBtn == 0 && prevBtn != 0) onRelease();
+            if (dragMode != DRAG_NONE) onDrag();
 
-                    if (cursorY > 700) { clearScreen(); cursorY = 40; }
-                    showCursor(cursorY);
-                    cursorX = 85;
-                    drawShellCursor(cursorX, cursorY);
-                } else if (asciiChar == 8) {
-                    if (cmdLen > 0 && cursorX > 85) {
-                        eraseShellCursor();
-                        cmdLen--; cmdBuffer[cmdLen] = 0; cursorX -= 10;
-                        g.setColor(C_BLACK); g.fillRect(cursorX, cursorY, 12, 20);
-                        drawShellCursor(cursorX, cursorY);
-                    }
-                } else if (asciiChar >= 32 && asciiChar <= 165) {
-                    if (cmdLen < 15) {
-                        eraseShellCursor();
-                        cmdBuffer[cmdLen] = asciiChar; cmdLen++;
-                        g.setColor(C_WHITE); g.drawChar((char)asciiChar, cursorX, cursorY);
-                        cursorX += 10;
-                        drawShellCursor(cursorX, cursorY);
-                    }
-                }
-                lastKey = asciiChar;
-            } else if (asciiChar == 0) {
-                lastKey = 0;
-                long shellTicks = java.lang.System.currentTimeMillis();
-                boolean wantCursorOn = ((shellTicks / 500) % 2) == 0;
-                if (wantCursorOn != shellCursorOn) {
-                    if (wantCursorOn) drawShellCursor(cursorX, cursorY); else eraseShellCursor();
-                }
-            }
-            Thread.sleep(1);
-        }
-    }
-
-    public static void initColors() {
-        C_BLACK = new Color(0x00000000); C_WHITE = new Color(0x00FFFFFF);
-        C_RED = new Color(0x00FF0000); C_GREEN = new Color(0x0000FF00);
-        C_BLUE = new Color(0x000000FF); C_YELLOW = new Color(0x00FFFF00);
-        C_GRAY = new Color(0x00808080); C_LIGHT_GRAY = new Color(0x00C0C0C0);
-        C_DARK_GRAY = new Color(0x00404040); C_TRANSPARENT = new Color(0x00000055);
-        C_WIN_BG = new Color(0x00E0E0E0); C_WIN_TITLE = new Color(0x00000080);
-        C_SEL = new Color(0x00D0D0FF); C_FOLDER = new Color(0x00F0C000); C_FILE = new Color(0x00A0A0A0);
-    }
-
-    // Arpegio de arranque para el PC Speaker (monofónico: una nota a la vez)
-    private static final int[] CHIME_FREQ = { 523, 659, 784, 1047, 1319, 1047, 784 }; // C5 E5 G5 C6 E6 C6 G5
-    private static final int[] CHIME_DUR  = { 190, 190, 190, 190, 330, 170, 480 };
-
-    public static void playBootChime() {
-        Toolkit tk = Toolkit.getDefaultToolkit();
-        for (int i = 0; i < CHIME_FREQ.length; i++) {
-            tk.beep(CHIME_FREQ[i]);
-            Thread.sleep(CHIME_DUR[i]);
-            tk.beep(0);
-            Thread.sleep(30);
-        }
-    }
-
-    // =========================================================================
-    // MOTOR GRÁFICO ORIENTADO A OBJETOS (JExplorer)
-    // =========================================================================
-    public static void runStartX() {
-        winX = 150; winY = 60; winW = 720; winH = 460;
-        windowOpen = true; windowMinimized = false; isDragging = false;
-        showStartMenu = false; showContextMenu = false; showAbout = false; showFileMenu = false;
-        backgroundMode = 0; selectedNode = null; clipboardNode = null; isNaming = false;
-
-        initFS();
-        redrawScreen();
-        playBootChime();
-
-        int oldMx = 512, oldMy = 384, lastBtn = 0;
-        drawMouse(oldMx, oldMy);
-
-        while (true) {
-            // RELOJ RTC DINÁMICO EN LA BARRA DE TAREAS (Usando Micro-rt Calendar y Graphics2D)
-            int hour = Calendar.get(Calendar.HOUR), min = Calendar.get(Calendar.MINUTE), sec = Calendar.get(Calendar.SECOND);
-            int day = Calendar.get(Calendar.DAY), month = Calendar.get(Calendar.MONTH), year = Calendar.get(Calendar.YEAR);
-            g.setColor(C_LIGHT_GRAY); g.fillRect(880, 728, 144, 38);
-            g.setColor(C_BLACK);
-            
-            g.drawChar((char)((hour / 10) + '0'), 910, 733); g.drawChar((char)((hour % 10) + '0'), 920, 733); g.drawChar(':', 930, 733);
-            g.drawChar((char)((min / 10) + '0'), 940, 733);  g.drawChar((char)((min % 10) + '0'), 950, 733);  g.drawChar(':', 960, 733);
-            g.drawChar((char)((sec / 10) + '0'), 970, 733);  g.drawChar((char)((sec % 10) + '0'), 980, 733);
-            
-            g.drawChar((char)((day / 10) + '0'), 890, 750); g.drawChar((char)((day % 10) + '0'), 900, 750); g.drawChar('/', 910, 750);
-            g.drawChar((char)((month / 10) + '0'), 920, 750); g.drawChar((char)((month % 10) + '0'), 930, 750); g.drawString("/20", 940, 750);
-            g.drawChar((char)((year / 10) + '0'), 970, 750); g.drawChar((char)((year % 10) + '0'), 980, 750);
-
-            int mx = Native.sys(Native.SYS_READ_MOUSE, 0, 0, 0, 0);
-            int my = Native.sys(Native.SYS_READ_MOUSE, 1, 0, 0, 0);
-            int btn = Native.sys(Native.SYS_READ_MOUSE, 2, 0, 0, 0);
-
-            if (mx < 0) mx = 0; if (mx > 1010) mx = 1010;
-            if (my < 0) my = 0; if (my > 750) my = 750;
-
-            if (mx != oldMx || my != oldMy) {
-                if (isDragging && windowOpen && !windowMinimized && !showAbout && !isNaming) {
-                    winX = mx - dragOffsetX; winY = my - dragOffsetY;
-                    if (winX < 0) winX = 0; if (winY < 0) winY = 0;
-                    if (winX + winW > 1024) winX = 1024 - winW;
-                    if (winY + winH > 726) winY = 726 - winH;
-                    redrawScreen();
-                } else { clearMouse(oldMx, oldMy); }
-                drawMouse(mx, my);
-                oldMx = mx; oldMy = my;
+            int sec = Calendar.get(Calendar.SECOND);
+            if (mouseX != prevX || mouseY != prevY || mouseBtn != prevBtn || sec != lastSecond) {
+                lastSecond = sec;
+                paint();
             }
 
-            int key = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
-            if (isNaming) {
-                if (key != 0 && key != lastUIKey) {
-                    if (key == 13 && newNameLen > 0) {
-                        int[] custom = new int[newNameLen];
-                        for(int i = 0; i < newNameLen; i++) custom[i] = newNameBuf[i];
-                        if (!addNodeCustom(currentDir, custom, newNameLen, namingIsDir)) {
-                            Toolkit.getDefaultToolkit().beep(200); Thread.sleep(150); Toolkit.getDefaultToolkit().beep(0);
-                        }
-                        isNaming = false; redrawScreen(); drawMouse(mx, my);
-                    } else if (key == 27) { isNaming = false; redrawScreen(); drawMouse(mx, my);
-                    } else if (key == 8 && newNameLen > 0) { newNameLen--; redrawScreen(); drawMouse(mx, my);
-                    } else if (key >= 32 && key <= 126 && newNameLen < 15) { newNameBuf[newNameLen] = key; newNameLen++; redrawScreen(); drawMouse(mx, my); }
-                }
-                if (key == 0) lastUIKey = 0; else lastUIKey = key;
-            } else { if (key == 27) break; }
-
-            if (!isNaming) {
-                if (btn == 2 && lastBtn != 2) { 
-                    if (showContextMenu || showStartMenu || showFileMenu) { showContextMenu = false; showStartMenu = false; showFileMenu = false; redrawScreen(); }
-                    int viewX = winX + 195, viewY = winY + 35, viewW = winW - 205, viewH = winH - 45;
-                    if (windowOpen && !windowMinimized && mx >= viewX && mx <= viewX + viewW && my >= viewY && my <= viewY + viewH) {
-                        fileMenuTarget = getClickedNode(mx, my);
-                        if(fileMenuTarget != null) selectedNode = fileMenuTarget;
-                        showFileMenu = true; fileMenuX = mx; fileMenuY = my;
-                        if (fileMenuX > 860) fileMenuX = 860; if (fileMenuY > 640) fileMenuY = 640;
-                    } else {
-                        showContextMenu = true; showStartMenu = false; contextX = mx; contextY = my;
-                        if (contextX > 820) contextX = 820; if (contextY > 600) contextY = 600;
-                    }
-                    redrawScreen(); drawMouse(mx, my); lastBtn = btn;
-                } else if (btn == 1 && lastBtn != 1) { 
-                    int ticks = (int) java.lang.System.currentTimeMillis();
-                    boolean isDoubleClick = (lastClickTick > 0 && (ticks - lastClickTick) < 500);
-                    lastClickTick = ticks;
-
-                    if (showFileMenu) {
-                        if (mx >= fileMenuX && mx <= fileMenuX + 160) {
-                            if (fileMenuTarget != null) {
-                                if (my >= fileMenuY + 5 && my <= fileMenuY + 25) { if(fileMenuTarget.isDir) currentDir = fileMenuTarget; selectedNode = null; }
-                                else if (my >= fileMenuY + 25 && my <= fileMenuY + 45) clipboardNode = fileMenuTarget;
-                                else if (my >= fileMenuY + 45 && my <= fileMenuY + 65) removeNode(fileMenuTarget);
-                            } else {
-                                if (my >= fileMenuY + 5 && my <= fileMenuY + 25) { isNaming = true; namingIsDir = false; newNameLen = 0; }
-                                else if (my >= fileMenuY + 25 && my <= fileMenuY + 45) { isNaming = true; namingIsDir = true; newNameLen = 0; }
-                                else if (my >= fileMenuY + 45 && my <= fileMenuY + 65) {
-                                    if (clipboardNode != null) {
-                                        boolean pasted = clipboardNode.name != null
-                                            ? addNode(currentDir, clipboardNode.name, clipboardNode.isDir)
-                                            : addNodeCustom(currentDir, clipboardNode.customName, clipboardNode.customLen, clipboardNode.isDir);
-                                        if (!pasted) {
-                                            Toolkit.getDefaultToolkit().beep(200); Thread.sleep(150); Toolkit.getDefaultToolkit().beep(0);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        showFileMenu = false; redrawScreen(); drawMouse(mx, my);
-                    } else if (showContextMenu) {
-                        if (mx >= contextX && mx <= contextX + 190) {
-                            if (my >= contextY + 15 && my <= contextY + 35) backgroundMode = 0;
-                            else if (my >= contextY + 35 && my <= contextY + 55) backgroundMode = 1;
-                            else if (my >= contextY + 55 && my <= contextY + 75) backgroundMode = 2;
-                            else if (my >= contextY + 75 && my <= contextY + 95) { windowOpen = true; windowMinimized = false; }
-                            else if (my >= contextY + 95 && my <= contextY + 115) showAbout = true;
-                        }
-                        showContextMenu = false; redrawScreen(); drawMouse(mx, my);
-                    } else if (showStartMenu) {
-                        int menuY = 726 - 105;
-                        if (mx >= 5 && mx <= 185 && my >= menuY && my <= 726) {
-                            if (my >= menuY + 20 && my < menuY + 50) { windowOpen = true; windowMinimized = false; }
-                            else if (my >= menuY + 50 && my < menuY + 80) { windowOpen = false; showAbout = false; }
-                            else if (my >= menuY + 80 && my <= 726) { clearScreen(); shutdown(); }
-                        }
-                        showStartMenu = false; redrawScreen(); drawMouse(mx, my);
-                    } else if (showAbout) {
-                        int ax = 262, ay = 250, aw = 500;
-                        int btnX = ax + aw - 23, btnY = ay + 5;
-                        if (mx >= btnX && mx <= btnX + 18 && my >= btnY && my <= btnY + 18) { showAbout = false; redrawScreen(); drawMouse(mx, my); }
-                    } else if (my >= 726) { 
-                        if (mx >= 5 && mx <= 85) { showStartMenu = !showStartMenu; redrawScreen(); drawMouse(mx, my); }
-                        else if (windowOpen && mx >= 95 && mx <= 235) { windowMinimized = !windowMinimized; redrawScreen(); drawMouse(mx, my); }
-                    } else if (windowOpen && !windowMinimized) {
-                        int btnX = winX + winW - 23, btnY = winY + 5;
-                        if (mx >= btnX && mx <= btnX + 18 && my >= btnY && my <= btnY + 18) {
-                            windowOpen = false; redrawScreen(); drawMouse(mx, my);
-                        } else if (mx >= winX && mx <= winX + winW - 30 && my >= winY && my <= winY + 27) {
-                            isDragging = true; dragOffsetX = mx - winX; dragOffsetY = my - winY;
-                        } else if (mx >= winX + 10 && mx <= winX + 190 && my >= winY + 35 && my <= winY + winH - 45) {
-                            int nodeY = winY + 55;
-                            if (my >= nodeY - 5 && my <= nodeY + 15) { currentDir = root; selectedNode = null; redrawScreen(); drawMouse(mx, my); }
-                            nodeY += 25;
-                            for (int i = 0; i < root.childCount; i++) {
-                                Node child = root.children[i];
-                                if (child.isDir) {
-                                    if (my >= nodeY - 5 && my <= nodeY + 15) { currentDir = child; selectedNode = null; redrawScreen(); drawMouse(mx, my); }
-                                    nodeY += 20;
-                                }
-                            }
-                        } else if (mx >= winX + 195 && mx <= winX + winW - 10 && my >= winY + 35 && my <= winY + winH - 45) {
-                            Node clicked = getClickedNode(mx, my);
-                            if (clicked == null) {
-                                int iconX = winX + 215, iconY = winY + 55;
-                                if (currentDir.parent != null && mx >= iconX && mx <= iconX + 60 && my >= iconY && my <= iconY + 50) {
-                                    currentDir = currentDir.parent; selectedNode = null; redrawScreen(); drawMouse(mx, my);
-                                } else { selectedNode = null; redrawScreen(); drawMouse(mx, my); }
-                            } else {
-                                if (selectedNode == clicked && isDoubleClick) { if(clicked.isDir) { currentDir = clicked; selectedNode = null; } } 
-                                else { selectedNode = clicked; }
-                                redrawScreen(); drawMouse(mx, my);
-                            }
-                        }
-                    }
-                    lastBtn = 1;
-                } else if (btn == 0) { isDragging = false; lastBtn = 0; }
-            }
-            Thread.sleep(1);
+            prevX = mouseX;
+            prevY = mouseY;
+            prevBtn = mouseBtn;
+            Native.sys(Native.SYS_SLEEP, 1, 0, 0, 0);
         }
-        clearScreen();
     }
 
-    public static Node getClickedNode(int mx, int my) {
-        int iconX = winX + 215, iconY = winY + 55;
-        if (currentDir.parent != null) iconX += 90; 
-        for (int i = 0; i < currentDir.childCount; i++) {
-            Node child = currentDir.children[i];
-            if (child != null) {
-                if (mx >= iconX - 5 && mx <= iconX + 65 && my >= iconY - 5 && my <= iconY + 55) return child;
-                iconX += 90;
-                if (iconX > winX + winW - 80) { iconX = winX + 215; iconY += 60; }
+    static void handleKeys() {
+        int k = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
+        if (k == 0) {
+            lastKey = 0;
+            return;
+        }
+        if (k == lastKey) return;
+        lastKey = k;
+
+        if (k == 27) {
+            menuOpen = -1;
+            fieldFocus = 0;
+            paint();
+            return;
+        }
+        if (fieldFocus == 0) return;
+
+        if (k == 8) {
+            if (fieldLen > 0) fieldLen = fieldLen - 1;
+        } else if (k >= 32 && k <= 126) {
+            if (fieldLen < 20) {
+                fieldBuf[fieldLen] = k;
+                fieldLen = fieldLen + 1;
             }
         }
-        return null;
+        paint();
     }
 
-    public static boolean addNode(Node parent, String staticName, boolean isDir) {
-        if (parent.childCount >= 8) return false;
-        Node n = new Node(); n.name = staticName; n.isDir = isDir; n.parent = parent; n.childCount = 0;
-        if (isDir) n.children = new Node[8];
-        parent.children[parent.childCount] = n; parent.childCount++;
-        return true;
-    }
-
-    public static boolean addNodeCustom(Node parent, int[] customName, int customLen, boolean isDir) {
-        if (parent.childCount >= 8) return false;
-        Node n = new Node(); n.customName = customName; n.customLen = customLen; n.isDir = isDir; n.parent = parent; n.childCount = 0;
-        if (isDir) n.children = new Node[8];
-        parent.children[parent.childCount] = n; parent.childCount++;
-        return true;
-    }
-
-    public static void removeNode(Node target) {
-        if (target == null || target.parent == null) return;
-        Node p = target.parent; int idx = -1;
-        for (int i = 0; i < p.childCount; i++) if (p.children[i] == target) { idx = i; break; }
-        if (idx != -1) {
-            for (int i = idx; i < p.childCount - 1; i++) p.children[i] = p.children[i + 1];
-            p.childCount--; p.children[p.childCount] = null;
+    // ======================================================================
+    // INPUT ROUTING
+    // ======================================================================
+    static void onPress() {
+        // menu bar has priority
+        if (mouseY < MENU_H) {
+            int m = menuIndexAt(mouseX);
+            if (m == menuOpen) menuOpen = -1; else menuOpen = m;
+            paint();
+            return;
         }
-        if (selectedNode == target) selectedNode = null;
+        if (menuOpen >= 0) {
+            if (menuHit()) return;
+            menuOpen = -1;
+        }
+        if (mouseY >= TASK_Y) {
+            taskbarClick();
+            return;
+        }
+
+        int i = windowAt(mouseX, mouseY);
+        if (i < 0) {
+            paint();
+            return;
+        }
+        raiseWin(i);
+
+        int ly = mouseY - wy[i];
+        if (ly < TITLE_H) {
+            if (titleButtons(i)) return;
+            dragMode = DRAG_MOVE;
+            dragWin = i;
+            dragDX = mouseX - wx[i];
+            dragDY = mouseY - wy[i];
+            paint();
+            return;
+        }
+        if (wMax[i] == 0 && inGrip(i)) {
+            dragMode = DRAG_SIZE;
+            dragWin = i;
+            dragDX = wx[i] + ww[i] - mouseX;
+            dragDY = wy[i] + wh[i] - mouseY;
+            paint();
+            return;
+        }
+        contentClick(i);
     }
 
-    public static void redrawScreen() {
-        drawBackground(); drawWindow(); drawTaskbar(); drawStartMenu(); drawContextMenu(); drawFileMenu(); drawNamingWindow(); drawAboutWindow();
-    }
-
-    public static void drawBackground() {
-        if (backgroundMode == 0) {
-            g.setColor(C_TRANSPARENT); g.fillRect(0, 0, 1024, 726);
-        } else if (backgroundMode == 1) {
-            for (int y = 0; y < 726; y += 8) {
-                int red = (y * 255) / 726;
-                g.setColor(new Color(((red / 2) << 16) | ((255 - red) / 2)));
-                g.fillRect(0, y, 1024, 8);
-            }
-        } else if (backgroundMode == 2) {
-            for (int px = 0; px < 1024; px += 4) {
-                for (int py = 0; py < 726; py += 4) {
-                    int x0 = ((px - 600) * 4096) / 300, y0 = ((py - 364) * 4096) / 300;
-                    int cx = 0, cy = 0, iter = 0;
-                    while (iter < 24) {
-                        int nx2 = (cx * cx) >> 12, ny2 = (cy * cy) >> 12;
-                        if (nx2 + ny2 > 16384) break;
-                        int xtemp = nx2 - ny2 + x0;
-                        cy = ((2 * cx * cy) >> 12) + y0; cx = xtemp; iter++;
-                    }
-                    if (iter < 24) g.setColor(new Color(0x000000FF | (iter * 10 << 8) | (iter * 5)));
-                    else g.setColor(C_BLACK);
-                    g.fillRect(px, py, 4, 4);
-                }
-            }
+    static void onRelease() {
+        dragMode = DRAG_NONE;
+        dragWin = -1;
+        if (pressedBtn >= 0) {
+            pressedBtn = -1;
+            paint();
         }
     }
 
-    public static void drawWindow() {
-        if (!windowOpen || windowMinimized) return;
-        g.setColor(C_LIGHT_GRAY); g.fillRect(winX, winY, winW, winH);
-        g.setColor(C_WIN_TITLE); g.fillRect(winX + 3, winY + 3, winW - 6, 24);
-        g.setColor(C_WHITE); g.drawString("JExplorer - ", winX + 10, winY + 10); 
-        
-        if (currentDir.name != null) g.drawString(currentDir.name, winX + 130, winY + 10);
-        else for(int c = 0; c < currentDir.customLen; c++) g.drawChar((char)currentDir.customName[c], winX + 130 + c*10, winY + 10);
-
-        int btnX = winX + winW - 23, btnY = winY + 5;
-        g.setColor(C_RED); g.fillRect(btnX, btnY, 18, 18);
-        g.setColor(C_WHITE); g.drawString("X", btnX + 5, btnY + 5);
-
-        int treeX = winX + 10, treeY = winY + 35, treeW = 180, treeH = winH - 45;
-        int viewX = winX + 195, viewY = winY + 35, viewW = winW - 205, viewH = winH - 45;
-
-        g.setColor(C_WIN_BG); g.fillRect(treeX, treeY, treeW, treeH);
-        g.setColor(C_WHITE); g.fillRect(viewX, viewY, viewW, viewH);
-
-        int nodeY = treeY + 20;
-        if (currentDir == root) { g.setColor(C_WIN_TITLE); g.fillRect(treeX + 5, nodeY - 5, 170, 20); g.setColor(C_WHITE); } 
-        else g.setColor(C_BLACK);
-        g.drawString("[-] / (Root)", treeX + 10, nodeY); nodeY += 25;
-
-        for (int i = 0; i < root.childCount; i++) {
-            Node child = root.children[i];
-            if (child.isDir) {
-                if (child == currentDir) { g.setColor(C_WIN_TITLE); g.fillRect(treeX + 15, nodeY - 5, 160, 20); g.setColor(C_WHITE); } 
-                else g.setColor(C_BLACK);
-                g.drawString("+-- ", treeX + 25, nodeY); 
-                if (child.name != null) g.drawString(child.name, treeX + 55, nodeY);
-                else for(int c = 0; c < child.customLen; c++) g.drawChar((char)child.customName[c], treeX + 55 + c*10, nodeY);
-                nodeY += 20;
-            }
-        }
-
-        int iconX = viewX + 20, iconY = viewY + 20;
-        if (currentDir.parent != null) {
-            g.setColor(C_GRAY); g.fillRect(iconX, iconY, 32, 22);
-            g.setColor(C_BLACK); g.drawString(".. (Atras)", iconX, iconY + 38);
-            iconX += 90;
-        }
-
-        for (int i = 0; i < currentDir.childCount; i++) {
-            Node child = currentDir.children[i];
-            if (child != null) {
-                if (child == selectedNode) { g.setColor(C_SEL); g.fillRect(iconX - 5, iconY - 5, 80, 60); }
-                if (child.isDir) { g.setColor(C_FOLDER); g.fillRect(iconX, iconY, 32, 22); g.fillRect(iconX, iconY - 4, 12, 4); } 
-                else { g.setColor(C_FILE); g.fillRect(iconX, iconY, 20, 26); }
-                g.setColor(C_BLACK); 
-                if (child.name != null) g.drawString(child.name, iconX, iconY + 38);
-                else for(int c = 0; c < child.customLen; c++) g.drawChar((char)child.customName[c], iconX + c*10, iconY + 38);
-                iconX += 90;
-                if (iconX > viewX + viewW - 80) { iconX = viewX + 20; iconY += 60; }
-            }
-        }
-    }
-
-    public static void drawTaskbar() {
-        int taskbarY = 726;
-        g.setColor(C_LIGHT_GRAY); g.fillRect(0, taskbarY, 1024, 42);
-        g.setColor(C_WHITE); g.fillRect(0, taskbarY, 1024, 2);
-
-        g.setColor(showStartMenu ? C_GRAY : C_GREEN);
-        g.fillRect(5, taskbarY + 4, 80, 32);
-        g.setColor(C_WHITE); g.drawString("INICIO", 22, taskbarY + 14);
-
-        if (windowOpen) {
-            g.setColor(windowMinimized ? C_FILE : C_WIN_BG);
-            g.fillRect(95, taskbarY + 4, 140, 32);
-            g.setColor(C_BLACK); g.drawString("JExplorer", 110, taskbarY + 14);
-        }
-    }
-
-    public static void drawStartMenu() {
-        if (!showStartMenu) return;
-        int menuH = 105, menuY = 726 - menuH;
-        g.setColor(C_LIGHT_GRAY); g.fillRect(5, menuY, 180, menuH);
-        g.setColor(C_WIN_TITLE); g.fillRect(5, menuY, 25, menuH);
-        g.setColor(C_BLACK);
-        g.drawString("Abrir JExplorer", 35, menuY + 25);
-        g.drawString("Cerrar Ventanas", 35, menuY + 55);
-        g.drawString("Apagar Equipo", 35, menuY + 85);
-    }
-
-    public static void drawContextMenu() {
-        if (!showContextMenu) return;
-        g.setColor(new Color(0x00F0F0F0)); g.fillRect(contextX, contextY, 190, 125);
-        g.setColor(C_BLACK); g.drawRect(contextX, contextY, 190, 125);
-        g.drawString("Fondo Solido", contextX + 15, contextY + 20);
-        g.drawString("Fondo Gradiente", contextX + 15, contextY + 40);
-        g.drawString("Fondo Fractal", contextX + 15, contextY + 60);
-        g.drawString("Abrir Explorador", contextX + 15, contextY + 80);
-        g.drawString("Acerca de JVMOS", contextX + 15, contextY + 100);
-    }
-
-    public static void drawFileMenu() {
-        if (!showFileMenu) return;
-        g.setColor(new Color(0x00F0F0F0)); g.fillRect(fileMenuX, fileMenuY, 160, 70);
-        g.setColor(C_BLACK); g.drawRect(fileMenuX, fileMenuY, 160, 70);
-        if (fileMenuTarget != null) {
-            g.drawString("Abrir Elemento", fileMenuX + 10, fileMenuY + 20);
-            g.drawString("Copiar Elemento", fileMenuX + 10, fileMenuY + 40);
-            g.drawString("Eliminar", fileMenuX + 10, fileMenuY + 60);
+    static void onDrag() {
+        int i = dragWin;
+        if (i < 0) return;
+        if (dragMode == DRAG_MOVE) {
+            wx[i] = mouseX - dragDX;
+            wy[i] = mouseY - dragDY;
+            if (wy[i] < DESK_TOP) wy[i] = DESK_TOP;
+            if (wy[i] > DESK_BOT - TITLE_H) wy[i] = DESK_BOT - TITLE_H;
+            if (wx[i] < 0 - ww[i] + 80) wx[i] = 0 - ww[i] + 80;
+            if (wx[i] > SCR_W - 80) wx[i] = SCR_W - 80;
         } else {
-            g.drawString("Nuevo Archivo", fileMenuX + 10, fileMenuY + 20);
-            g.drawString("Nueva Carpeta", fileMenuX + 10, fileMenuY + 40);
-            g.drawString("Pegar Aqui", fileMenuX + 10, fileMenuY + 60);
+            ww[i] = mouseX + dragDX - wx[i];
+            wh[i] = mouseY + dragDY - wy[i];
+            if (ww[i] < MIN_W) ww[i] = MIN_W;
+            if (wh[i] < MIN_H) wh[i] = MIN_H;
+            if (wx[i] + ww[i] > SCR_W) ww[i] = SCR_W - wx[i];
+            if (wy[i] + wh[i] > DESK_BOT) wh[i] = DESK_BOT - wy[i];
         }
     }
 
-    public static void drawNamingWindow() {
-        if (!isNaming) return;
-        int bx = winX + 250, by = winY + 150;
-        g.setColor(C_WIN_BG); g.fillRect(bx, by, 220, 60);
-        g.setColor(C_BLACK); g.drawRect(bx, by, 220, 60);
-        g.drawString(namingIsDir ? "Nombre Carpeta:" : "Nombre Archivo:", bx + 10, by + 20);
-        g.setColor(C_WHITE); g.fillRect(bx + 10, by + 30, 200, 20);
-        g.setColor(C_BLACK);
-        for(int i = 0; i < newNameLen; i++) g.drawChar((char)newNameBuf[i], bx + 12 + i*10, by + 45);
-        g.fillRect(bx + 12 + newNameLen*10, by + 32, 8, 16); 
+    // Close / maximize / minimize buttons in the title bar. Returns true when
+    // the click was consumed.
+    static boolean titleButtons(int i) {
+        int bx = wx[i] + ww[i] - 22;
+        int by = wy[i] + 3;
+        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+            wOpen[i] = 0;
+            clickTone();
+            paint();
+            return true;
+        }
+        bx = bx - 20;
+        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+            toggleMax(i);
+            clickTone();
+            paint();
+            return true;
+        }
+        bx = bx - 20;
+        if (hit(mouseX, mouseY, bx, by, 18, 14)) {
+            wMin[i] = 1;
+            clickTone();
+            paint();
+            return true;
+        }
+        return false;
     }
 
-    public static void drawAboutWindow() {
-        if (!showAbout) return;
-        int ax = 262, ay = 250, aw = 500, ah = 220;
-        g.setColor(C_WIN_BG); g.fillRect(ax, ay, aw, ah);
-        g.setColor(new Color(0x001F4E5B)); g.fillRect(ax + 3, ay + 3, aw - 6, 24);
-        g.setColor(C_WHITE); g.drawString("Acerca de JVMOS", ax + 10, ay + 10);
-        
-        int btnX = ax + aw - 23, btnY = ay + 5;
-        g.setColor(C_RED); g.fillRect(btnX, btnY, 18, 18);
-        g.setColor(C_WHITE); g.drawString("X", btnX + 5, btnY + 5);
-
-        g.setColor(C_BLACK);
-        g.drawString("JVMOS - Version 1.0", ax + 170, ay + 60);
-        g.drawString("Sistema operativo escrito en ASM y Java", ax + 20, ay + 80);
-        g.drawString("Hecho por: Allan Ayes Ramirez (30/08/2026)", ax + 20, ay + 110);
-        g.drawString("GitHub: aayes89", ax + 20, ay + 130);
-        g.drawString("Memoria RAM: 128 MB (Estatica BIOS)", ax + 20, ay + 160);
-        g.drawString("Video: VBE VESA 1024x768 @ 32bpp", ax + 20, ay + 180);
+    static void toggleMax(int i) {
+        if (wMax[i] == 1) {
+            wMax[i] = 0;
+            wx[i] = rx[i];
+            wy[i] = ry[i];
+            ww[i] = rw[i];
+            wh[i] = rh[i];
+        } else {
+            rx[i] = wx[i];
+            ry[i] = wy[i];
+            rw[i] = ww[i];
+            rh[i] = wh[i];
+            wMax[i] = 1;
+            wx[i] = 0;
+            wy[i] = DESK_TOP;
+            ww[i] = SCR_W;
+            wh[i] = DESK_BOT - DESK_TOP;
+        }
     }
-    
-    public static void clearMouse(int x, int y) {
-        if (backgroundMode == 0) { g.setColor(C_TRANSPARENT); g.fillRect(x, y, 14, 18);
-        } else if (backgroundMode == 1) {
-            for (int iy = y; iy < y + 18; iy += 2) {
-                if (iy >= 726) break;
-                int red = (iy * 255) / 726; g.setColor(new Color(((red / 2) << 16) | ((255 - red) / 2))); g.fillRect(x, iy, 14, 2);
-            }
-        } else if (backgroundMode == 2) {
-            for (int px = (x / 4) * 4; px < x + 14; px += 4) {
-                for (int py = (y / 4) * 4; py < y + 18; py += 4) {
-                    if (py >= 726) continue;
-                    int x0 = ((px - 600) * 4096) / 300, y0 = ((py - 364) * 4096) / 300;
-                    int cx = 0, cy = 0, iter = 0;
-                    while (iter < 24) {
-                        int nx2 = (cx * cx) >> 12, ny2 = (cy * cy) >> 12;
-                        if (nx2 + ny2 > 16384) break;
-                        int xtemp = nx2 - ny2 + x0; cy = ((2 * cx * cy) >> 12) + y0; cx = xtemp; iter++;
+
+    static boolean inGrip(int i) {
+        return hit(mouseX, mouseY, wx[i] + ww[i] - GRIP, wy[i] + wh[i] - GRIP, GRIP, GRIP);
+    }
+
+    static void taskbarClick() {
+        int bx = 8;
+        int i = 0;
+        while (i < WIN_COUNT) {
+            if (wOpen[i] == 1) {
+                if (hit(mouseX, mouseY, bx, TASK_Y + 4, 150, TASK_H - 8)) {
+                    if (wMin[i] == 1) {
+                        wMin[i] = 0;
+                        raiseWin(i);
+                    } else if (zorder[WIN_COUNT - 1] == i) {
+                        wMin[i] = 1;
+                    } else {
+                        raiseWin(i);
                     }
-                    if (iter < 24) g.setColor(new Color(0x000000FF | (iter * 10 << 8) | (iter * 5))); else g.setColor(C_BLACK);
-                    g.fillRect(px, py, 4, 4);
+                    clickTone();
+                    paint();
+                    return;
                 }
+                bx = bx + 156;
+            }
+            i = i + 1;
+        }
+        paint();
+    }
+
+    // ---- menus -----------------------------------------------------------
+    static int menuIndexAt(int px) {
+        if (px >= 8 && px < 56) return 0;      // File
+        if (px >= 56 && px < 104) return 1;    // View
+        if (px >= 104 && px < 152) return 2;   // Help
+        return -1;
+    }
+
+    static int menuX(int m) {
+        if (m == 0) return 8;
+        if (m == 1) return 56;
+        return 104;
+    }
+
+    static int menuItems(int m) {
+        if (m == 0) return 3;
+        if (m == 1) return 2;
+        return 1;
+    }
+
+    static boolean menuHit() {
+        int mx0 = menuX(menuOpen);
+        int n = menuItems(menuOpen);
+        if (!hit(mouseX, mouseY, mx0, MENU_H, 180, n * 20 + 6)) return false;
+
+        int item = (mouseY - MENU_H - 3) / 20;
+        if (item < 0) item = 0;
+        if (item >= n) item = n - 1;
+        menuAction(menuOpen, item);
+        menuOpen = -1;
+        clickTone();
+        paint();
+        return true;
+    }
+
+    static void menuAction(int m, int item) {
+        if (m == 0) {
+            if (item == 0) {
+                openAll();
+            } else if (item == 1) {
+                int top = zorder[WIN_COUNT - 1];
+                wOpen[top] = 0;
+            } else {
+                shutdown();
+            }
+        } else if (m == 1) {
+            if (item == 0) cascade(); else restoreAll();
+        } else {
+            wOpen[W_ABOUT] = 1;
+            wMin[W_ABOUT] = 0;
+            raiseWin(W_ABOUT);
+        }
+    }
+
+    static void openAll() {
+        int i = 0;
+        while (i < WIN_COUNT) {
+            wOpen[i] = 1;
+            wMin[i] = 0;
+            i = i + 1;
+        }
+    }
+
+    static void restoreAll() {
+        int i = 0;
+        while (i < WIN_COUNT) {
+            wMin[i] = 0;
+            wMax[i] = 0;
+            i = i + 1;
+        }
+        cascade();
+    }
+
+    static void cascade() {
+        int i = 0;
+        int step = 0;
+        while (i < WIN_COUNT) {
+            int id = zorder[i];
+            if (wOpen[id] == 1) {
+                wMax[id] = 0;
+                wx[id] = 60 + step * 34;
+                wy[id] = DESK_TOP + 24 + step * 30;
+                ww[id] = 520;
+                wh[id] = 400;
+                step = step + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    static void raiseWin(int i) {
+        int at = 0;
+        int k = 0;
+        while (k < WIN_COUNT) {
+            if (zorder[k] == i) at = k;
+            k = k + 1;
+        }
+        k = at;
+        while (k < WIN_COUNT - 1) {
+            zorder[k] = zorder[k + 1];
+            k = k + 1;
+        }
+        zorder[WIN_COUNT - 1] = i;
+    }
+
+    // Topmost open, non-minimized window containing the point.
+    static int windowAt(int px, int py) {
+        int k = WIN_COUNT - 1;
+        while (k >= 0) {
+            int id = zorder[k];
+            if (wOpen[id] == 1 && wMin[id] == 0) {
+                if (hit(px, py, wx[id], wy[id], ww[id], wh[id])) return id;
+            }
+            k = k - 1;
+        }
+        return -1;
+    }
+
+    static boolean hit(int px, int py, int x, int y, int w, int h) {
+        if (px < x) return false;
+        if (py < y) return false;
+        if (px >= x + w) return false;
+        if (py >= y + h) return false;
+        return true;
+    }
+
+    // ======================================================================
+    // PAINT
+    // ======================================================================
+    static void paint() {
+        drawDesktop();
+        int k = 0;
+        while (k < WIN_COUNT) {
+            int id = zorder[k];
+            if (wOpen[id] == 1 && wMin[id] == 0) drawWindow(id);
+            k = k + 1;
+        }
+        drawMenuBar();
+        drawTaskbar();
+        if (menuOpen >= 0) drawDropdown();
+        drawPointer(mouseX, mouseY);
+        g.present();
+    }
+
+    static void drawDesktop() {
+        g.setRGB(C_DESK);
+        g.fillRect(0, DESK_TOP, SCR_W, DESK_BOT - DESK_TOP);
+        if (chkGrid == 1) {
+            g.setRGB(C_DESK2);
+            int y = DESK_TOP;
+            while (y < DESK_BOT) {
+                g.fillRect(0, y, SCR_W, 1);
+                y = y + 4;
             }
         }
-        if (windowOpen && !windowMinimized && x < winX + winW && x + 14 > winX && y < winY + winH && y + 18 > winY) drawWindow();
-        if (showAbout && x < 262 + 500 && x + 14 > 262 && y < 250 + 220 && y + 18 > 250) drawAboutWindow();
-        if (isNaming && x < winX + 470 && x + 14 > winX + 250 && y < winY + 210 && y + 18 > winY + 150) drawNamingWindow();
-        if (y + 18 >= 726) drawTaskbar();
-        if (showStartMenu && x < 185 && y + 18 > 621) drawStartMenu();
-        if (showContextMenu && x < contextX + 190 && x + 14 > contextX && y < contextY + 125 && y + 18 > contextY) drawContextMenu();
-        if (showFileMenu && x < fileMenuX + 160 && x + 14 > fileMenuX && y < fileMenuY + 70 && y + 18 > fileMenuY) drawFileMenu();
     }
 
-    public static void drawMouse(int x, int y) {
-        g.setColor(C_BLACK); for (int i = 0; i < 12; i++) g.fillRect(x, y + i, i + 2, 1); g.fillRect(x + 2, y + 12, 4, 5);
-        g.setColor(C_WHITE); for (int i = 1; i < 10; i++) g.fillRect(x + 1, y + i, i, 1); g.fillRect(x + 3, y + 10, 2, 6);
+    // ---- window chrome ---------------------------------------------------
+    static void drawWindow(int i) {
+        int x = wx[i];
+        int y = wy[i];
+        int w = ww[i];
+        int h = wh[i];
+        boolean active = zorder[WIN_COUNT - 1] == i;
+
+        panel(x, y, w, h, C_FACE, 1);
+
+        int tc = C_TITLE_B;
+        if (active) tc = C_TITLE_A;
+        g.setRGB(tc);
+        g.fillRect(x + BORDER, y + BORDER, w - 2 * BORDER, TITLE_H - BORDER);
+
+        g.setRGB(C_TEXTLT);
+        g.drawString(winTitle(i), x + 10, y + 3);
+
+        drawTitleBtn(x + w - 62, y + 3, 0);
+        drawTitleBtn(x + w - 42, y + 3, 1);
+        drawTitleBtn(x + w - 22, y + 3, 2);
+
+        int cx = x + BORDER + 5;
+        int cy = y + TITLE_H + 4;
+        int cw = w - 2 * BORDER - 10;
+        int chh = h - TITLE_H - BORDER - 9;
+        panel(cx, cy, cw, chh, C_FACE, 0);
+        drawContent(i, cx + 6, cy + 6, cw - 12, chh - 12);
+
+        if (wMax[i] == 0) drawGrip(x + w - GRIP - 2, y + h - GRIP - 2);
     }
 
-    public static void initFS() {
-        root = new Node(); root.name = "Root"; root.isDir = true; root.children = new Node[8]; root.childCount = 0; root.parent = null;
-        Node appsDir = new Node(); appsDir.name = "APPS"; appsDir.isDir = true; appsDir.children = new Node[8]; appsDir.childCount = 0; appsDir.parent = root;
-        Node paintApp = new Node(); paintApp.name = "Paint.class"; paintApp.isDir = false; paintApp.parent = appsDir;
-        appsDir.children[0] = paintApp; appsDir.childCount = 1;
-        Node docsDir = new Node(); docsDir.name = "DOCS"; docsDir.isDir = true; docsDir.children = new Node[8]; docsDir.childCount = 0; docsDir.parent = root;
-        root.children[0] = appsDir; root.children[1] = docsDir; root.childCount = 2;
-        currentDir = root;
+    static String winTitle(int i) {
+        if (i == W_GALLERY) return "Widget Gallery";
+        if (i == W_FILES) return "File Manager";
+        if (i == W_SYSTEM) return "System Info";
+        return "About JVMOS";
     }
 
-    // COMANDOS HISTÓRICOS INTERACTIVOS (Basados en Calendar)
-    public static void showTime(int y) {
-        int hour = Calendar.get(Calendar.HOUR), min  = Calendar.get(Calendar.MINUTE), sec  = Calendar.get(Calendar.SECOND);
-        g.setColor(C_GREEN); g.drawString(" HORA: ", 20, y);
-        g.drawChar((char)((hour / 10) + '0'), 90, y); g.drawChar((char)((hour % 10) + '0'), 100, y); g.drawChar(':', 110, y);
-        g.drawChar((char)((min / 10) + '0'), 120, y); g.drawChar((char)((min % 10) + '0'), 130, y);  g.drawChar(':', 140, y);
-        g.drawChar((char)((sec / 10) + '0'), 150, y); g.drawChar((char)((sec % 10) + '0'), 160, y);
-    }
-
-    public static void showDate(int y) {
-        int day = Calendar.get(Calendar.DAY), month = Calendar.get(Calendar.MONTH), year = Calendar.get(Calendar.YEAR);
-        g.setColor(C_GREEN); g.drawString("FECHA: ", 20, y);
-        g.drawChar((char)((day / 10) + '0'), 90, y); g.drawChar((char)((day % 10) + '0'), 100, y); g.drawChar('/', 110, y);
-        g.drawChar((char)((month / 10) + '0'), 120, y); g.drawChar((char)((month % 10) + '0'), 130, y); g.drawString("/20", 140, y);
-        g.drawChar((char)((year / 10) + '0'), 170, y); g.drawChar((char)((year % 10) + '0'), 180, y);
-    }
-
-    public static void initKeyboard() { Native.sys(Native.SYS_SET_KBD_LAYOUT, 1, 0, 0, 0); }
-    public static void clearScreen() { g.setColor(C_BLACK); g.fillRect(0, 0, 1024, 768); }
-    public static void showCursor(int y) { g.setColor(C_GREEN); g.drawString("JVMOS>", 20, y); }
-
-    public static void drawShellCursor(int x, int y) {
-        if (shellCursorOn) { g.setColor(C_BLACK); g.fillRect(shellCursorX, shellCursorY, 8, 18); }
-        shellCursorX = x; shellCursorY = y;
-        g.setColor(C_GREEN); g.fillRect(shellCursorX, shellCursorY, 8, 18);
-        shellCursorOn = true;
-    }
-
-    public static void eraseShellCursor() {
-        if (shellCursorOn) {
-            g.setColor(C_BLACK); g.fillRect(shellCursorX, shellCursorY, 8, 18);
-            shellCursorOn = false;
+    // kind: 0 minimize, 1 maximize, 2 close
+    static void drawTitleBtn(int x, int y, int kind) {
+        panel(x, y, 18, 14, C_FACE, 1);
+        g.setRGB(C_TEXT);
+        if (kind == 0) {
+            g.fillRect(x + 4, y + 9, 10, 2);
+        } else if (kind == 1) {
+            g.fillRect(x + 4, y + 3, 10, 8);
+            g.setRGB(C_FACE);
+            g.fillRect(x + 5, y + 5, 8, 5);
+        } else {
+            int k = 0;
+            while (k < 7) {
+                g.fillRect(x + 5 + k, y + 3 + k, 2, 2);
+                g.fillRect(x + 11 - k, y + 3 + k, 2, 2);
+                k = k + 1;
+            }
         }
     }
 
-    public static void dramaticBIOS() {
-        clearScreen(); try { Thread.sleep(250); } catch(Exception e) {}
-        g.setColor(C_GREEN); g.drawString("JVMOS BIOS [v2.5]", 20, 25); g.drawString("=============================================", 20, 45);
-        g.drawString("[ OK ]", 20, 75); g.setColor(C_WHITE); g.drawString("Verificando CPU x86 [Protected Mode 32-Bit]...", 90, 75);
-        g.setColor(C_GREEN); g.drawString("[ OK ]", 20, 95); g.setColor(C_WHITE); g.drawString("Memoria RAM Detectada: [128MB]", 90, 95);
-        g.setColor(C_GREEN); g.drawString("[ OK ]", 20, 115); g.setColor(C_WHITE); g.drawString("Cargando Driver PS/2 Keyboard [LATAM ISO Map]", 90, 115);
-        g.setColor(C_GREEN); g.drawString("[ OK ]", 20, 135); g.setColor(C_WHITE); g.drawString("Cargando Driver Mouse i8042 [240 DPI]", 90, 135);
-        g.setColor(C_GREEN); g.drawString("[ OK ]", 20, 155); g.setColor(C_WHITE); g.drawString("Montando Sistema de Archivos JVMFS [Virtual Ramdisk]", 90, 155);
-        g.setColor(C_GREEN); g.drawString("[ OK ]", 20, 175); g.setColor(C_WHITE); g.drawString("Modo de Video VBE VESA [1024x768 @ 32bpp]", 90, 175);
-        g.setColor(C_GREEN); g.drawString("SISTEMA LISTO. Iniciando Shell interactivo...", 20, 205);
-        try { Thread.sleep(1000); } catch(Exception e) {} clearScreen();
+    static void drawGrip(int x, int y) {
+        int k = 0;
+        while (k < 3) {
+            int o = k * 4;
+            g.setRGB(C_LIGHT);
+            g.fillRect(x + 10 - o, y + 2, 2, 2);
+            g.fillRect(x + 10 - o, y + 6, 2, 2);
+            g.setRGB(C_SHADOW);
+            g.fillRect(x + 11 - o, y + 3, 2, 2);
+            g.fillRect(x + 11 - o, y + 7, 2, 2);
+            k = k + 1;
+        }
     }
 
-    public static void shell() {
-        g.setColor(C_GREEN);
-        g.drawString("JVMOS TERMINAL INTERACTIVA - Escriba 'startx'", 20, 30);
-        g.drawString("-----------------------------------------------------", 20, 50);
+    // ---- menu bar / dropdown / taskbar -----------------------------------
+    static void drawMenuBar() {
+        panel(0, 0, SCR_W, MENU_H, C_FACE, 1);
+        drawMenuTitle("File", 0);
+        drawMenuTitle("View", 1);
+        drawMenuTitle("Help", 2);
     }
 
-    public static void shutdown() {
-        g.setColor(C_RED); g.drawString("SISTEMA APAGADO. CERRANDO EN 2s...", 380, 360);
-        Toolkit.getDefaultToolkit().beep(500); try{ Thread.sleep(500); } catch(Exception e){} Toolkit.getDefaultToolkit().beep(0);
-        try { Thread.sleep(1500); } catch(Exception e){} java.lang.System.exit(0);
+    static void drawMenuTitle(String s, int m) {
+        int x = menuX(m);
+        if (menuOpen == m) {
+            g.setRGB(C_SEL);
+            g.fillRect(x - 4, 2, 48, MENU_H - 4);
+            g.setRGB(C_TEXTLT);
+        } else {
+            g.setRGB(C_TEXT);
+        }
+        g.drawString(s, x + 4, 2);
+    }
+
+    static void drawDropdown() {
+        int x = menuX(menuOpen);
+        int n = menuItems(menuOpen);
+        int h = n * 20 + 6;
+        panel(x, MENU_H, 180, h, C_FACE, 1);
+        if (menuOpen == 0) {
+            dropItem("Open All Windows", x, 0);
+            dropItem("Close Active Window", x, 1);
+            dropItem("Shut Down", x, 2);
+        } else if (menuOpen == 1) {
+            dropItem("Cascade Windows", x, 0);
+            dropItem("Restore All", x, 1);
+        } else {
+            dropItem("About JVMOS", x, 0);
+        }
+    }
+
+    static void dropItem(String s, int x, int item) {
+        int y = MENU_H + 3 + item * 20;
+        if (hit(mouseX, mouseY, x, y, 180, 20)) {
+            g.setRGB(C_SEL);
+            g.fillRect(x + 2, y, 176, 20);
+            g.setRGB(C_TEXTLT);
+        } else {
+            g.setRGB(C_TEXT);
+        }
+        g.drawString(s, x + 10, y + 2);
+    }
+
+    static void drawTaskbar() {
+        panel(0, TASK_Y, SCR_W, TASK_H, C_FACE, 1);
+        int bx = 8;
+        int i = 0;
+        while (i < WIN_COUNT) {
+            if (wOpen[i] == 1) {
+                int raised = 1;
+                if (wMin[i] == 0 && zorder[WIN_COUNT - 1] == i) raised = 0;
+                panel(bx, TASK_Y + 4, 150, TASK_H - 8, C_FACE, raised);
+                g.setRGB(C_TEXT);
+                g.drawString(winTitle(i), bx + 8 + (1 - raised), TASK_Y + 8 + (1 - raised));
+                bx = bx + 156;
+            }
+            i = i + 1;
+        }
+        drawClock(SCR_W - 96, TASK_Y + 6);
+    }
+
+    static void drawClock(int x, int y) {
+        panel(x - 6, TASK_Y + 4, 92, TASK_H - 8, C_FACE, 0);
+        g.setRGB(C_TEXT);
+        int h = Calendar.get(Calendar.HOUR);
+        int m = Calendar.get(Calendar.MINUTE);
+        int s = Calendar.get(Calendar.SECOND);
+        int cx = x;
+        cx = twoDigits(h, cx, y);
+        cx = g.drawChar(':', cx, y);
+        cx = twoDigits(m, cx, y);
+        cx = g.drawChar(':', cx, y);
+        twoDigits(s, cx, y);
+    }
+
+    static int twoDigits(int v, int x, int y) {
+        int nx = g.drawChar((char) ((v / 10) + 48), x, y);
+        return g.drawChar((char) ((v % 10) + 48), nx, y);
+    }
+
+    // ---- mouse pointer ---------------------------------------------------
+    static void drawPointer(int x, int y) {
+        g.setRGB(C_TEXT);
+        int i = 0;
+        while (i < 12) {
+            g.fillRect(x, y + i, i + 2, 1);
+            i = i + 1;
+        }
+        g.fillRect(x + 2, y + 12, 4, 5);
+        g.setRGB(C_TEXTLT);
+        i = 1;
+        while (i < 10) {
+            g.fillRect(x + 1, y + i, i, 1);
+            i = i + 1;
+        }
+        g.fillRect(x + 3, y + 10, 2, 6);
+    }
+
+    // ======================================================================
+    // WIDGET PRIMITIVES
+    // ======================================================================
+    static void bevel(int x, int y, int w, int h, int raised) {
+        int tl = C_LIGHT;
+        int br = C_SHADOW;
+        if (raised == 0) {
+            tl = C_SHADOW;
+            br = C_LIGHT;
+        }
+        g.setRGB(tl);
+        g.fillRect(x, y, w, 1);
+        g.fillRect(x, y, 1, h);
+        g.setRGB(br);
+        g.fillRect(x, y + h - 1, w, 1);
+        g.fillRect(x + w - 1, y, 1, h);
+    }
+
+    static void panel(int x, int y, int w, int h, int bg, int raised) {
+        g.setRGB(bg);
+        g.fillRect(x, y, w, h);
+        bevel(x, y, w, h, raised);
+    }
+
+    // nch = number of characters, used to centre without String.length()
+    static void button(int x, int y, int w, int h, String label, int nch, int down) {
+        int raised = 1;
+        if (down == 1) raised = 0;
+        panel(x, y, w, h, C_FACE, raised);
+        g.setRGB(C_TEXT);
+        g.drawString(label, x + (w - nch * CH_W) / 2 + down, y + (h - CH_H) / 2 + down);
+    }
+
+    static void checkbox(int x, int y, String label, int on) {
+        panel(x, y, 14, 14, C_FIELD, 0);
+        if (on == 1) {
+            g.setRGB(C_TEXT);
+            int k = 0;
+            while (k < 5) {
+                g.fillRect(x + 3 + k, y + 6 + k, 2, 2);
+                k = k + 1;
+            }
+            k = 0;
+            while (k < 5) {
+                g.fillRect(x + 11 - k, y + 3 + k, 2, 2);
+                k = k + 1;
+            }
+        }
+        g.setRGB(C_TEXT);
+        g.drawString(label, x + 22, y - 1);
+    }
+
+    static void radio(int x, int y, String label, int on) {
+        panel(x, y, 14, 14, C_FIELD, 0);
+        if (on == 1) {
+            g.setRGB(C_TEXT);
+            g.fillRect(x + 5, y + 4, 4, 6);
+            g.fillRect(x + 4, y + 5, 6, 4);
+        }
+        g.setRGB(C_TEXT);
+        g.drawString(label, x + 22, y - 1);
+    }
+
+    static void progressBar(int x, int y, int w, int pct) {
+        panel(x, y, w, 18, C_FIELD, 0);
+        int fill = (w - 4) * pct / 100;
+        if (fill < 0) fill = 0;
+        if (fill > w - 4) fill = w - 4;
+        g.setRGB(C_GREEN);
+        g.fillRect(x + 2, y + 2, fill, 14);
+    }
+
+    // Text input. The buffer is drawn character by character because
+    // drawString only works on constant-pool literals.
+    static void textField(int x, int y, int w) {
+        panel(x, y, w, 22, C_FIELD, 0);
+        g.setRGB(C_TEXT);
+        int i = 0;
+        int cx = x + 4;
+        while (i < fieldLen) {
+            cx = g.drawChar((char) fieldBuf[i], cx, y + 3);
+            i = i + 1;
+        }
+        if (fieldFocus == 1) {
+            int blink = Native.sys(Native.SYS_GET_TICKS, 0, 0, 0, 0) / 500;
+            if (blink - (blink / 2) * 2 == 0) {
+                g.setRGB(C_TEXT);
+                g.fillRect(cx, y + 3, 8, 16);
+            }
+        }
+    }
+
+    static void listRow(String label, int x, int y, int w, int idx) {
+        if (listSel == idx) {
+            g.setRGB(C_SEL);
+            g.fillRect(x, y, w, 18);
+            g.setRGB(C_TEXTLT);
+        } else {
+            g.setRGB(C_TEXT);
+        }
+        g.drawString(label, x + 6, y + 1);
+    }
+
+    static void label(String s, int x, int y) {
+        g.setRGB(C_TEXT);
+        g.drawString(s, x, y);
+    }
+
+    static void groupBox(int x, int y, int w, int h, String title) {
+        bevel(x, y + 7, w, h - 7, 0);
+        g.setRGB(C_FACE);
+        g.fillRect(x + 8, y, w - 16, 14);
+        g.setRGB(C_TITLE_A);
+        g.drawString(title, x + 12, y - 1);
+    }
+
+    // ======================================================================
+    // WINDOW CONTENT
+    // ======================================================================
+    static void drawContent(int i, int x, int y, int w, int h) {
+        if (i == W_GALLERY) {
+            drawGallery(x, y, w, h);
+        } else if (i == W_FILES) {
+            drawFiles(x, y, w, h);
+        } else if (i == W_SYSTEM) {
+            drawSystem(x, y, w, h);
+        } else {
+            drawAbout(x, y, w, h);
+        }
+    }
+
+    static void drawGallery(int x, int y, int w, int h) {
+        groupBox(x, y + 8, 210, 96, "Options");
+        checkbox(x + 12, y + 26, "Sound enabled", chkSound);
+        checkbox(x + 12, y + 50, "Desktop grid", chkGrid);
+        checkbox(x + 12, y + 74, "Show status", chkStatus);
+
+        groupBox(x + 224, y + 8, 210, 96, "Refresh rate");
+        radio(x + 236, y + 26, "Low", boolInt(radioSel == 0));
+        radio(x + 236, y + 50, "Normal", boolInt(radioSel == 1));
+        radio(x + 236, y + 74, "High", boolInt(radioSel == 2));
+
+        label("Name:", x + 12, y + 122);
+        textField(x + 68, y + 118, 200);
+
+        label("Progress:", x + 12, y + 158);
+        progressBar(x + 90, y + 156, 180, progress);
+        drawPercent(progress, x + 280, y + 157);
+
+        button(x + 12, y + 190, 84, 26, "Minus", 5, boolInt(pressedBtn == 0));
+        button(x + 104, y + 190, 84, 26, "Plus", 4, boolInt(pressedBtn == 1));
+        button(x + 196, y + 190, 84, 26, "Beep", 4, boolInt(pressedBtn == 2));
+
+        groupBox(x + 12, y + 236, 270, 118, "Modules");
+        listRow("kernel.Boot", x + 16, y + 254, 262, 0);
+        listRow("java.awt.Graphics2D", x + 16, y + 274, 262, 1);
+        listRow("java.io.PrintStream", x + 16, y + 294, 262, 2);
+        listRow("java.util.Calendar", x + 16, y + 314, 262, 3);
+        listRow("kernel.Native", x + 16, y + 334, 262, 4);
+    }
+
+    static void drawPercent(int v, int x, int y) {
+        g.setRGB(C_TEXT);
+        int nx = g.drawInt(v, x, y);
+        g.drawString("%", nx, y);
+    }
+
+    static int boolInt(boolean b) {
+        if (b) return 1;
+        return 0;
+    }
+
+    static void drawFiles(int x, int y, int w, int h) {
+        panel(x, y, w, 22, C_FACE, 1);
+        g.setRGB(C_TEXT);
+        g.drawString("/ (root)", x + 8, y + 3);
+
+        fileRow("APPS", x, y + 30, w, 0, 1);
+        fileRow("DOCS", x, y + 54, w, 1, 1);
+        fileRow("SYSTEM", x, y + 78, w, 2, 1);
+        fileRow("README.TXT", x, y + 102, w, 3, 0);
+        fileRow("BOOT.LOG", x, y + 126, w, 4, 0);
+        fileRow("PAINT.CLASS", x, y + 150, w, 5, 0);
+    }
+
+    static void fileRow(String name, int x, int y, int w, int idx, int isDir) {
+        if (listSel == idx + 10) {
+            g.setRGB(C_SEL);
+            g.fillRect(x, y, w, 20);
+        }
+        if (isDir == 1) {
+            g.setRGB(C_AMBER);
+            g.fillRect(x + 4, y + 5, 14, 10);
+            g.fillRect(x + 4, y + 3, 6, 2);
+        } else {
+            g.setRGB(C_LIGHT);
+            g.fillRect(x + 6, y + 3, 11, 14);
+            g.setRGB(C_DARK);
+            g.fillRect(x + 8, y + 6, 7, 1);
+            g.fillRect(x + 8, y + 9, 7, 1);
+            g.fillRect(x + 8, y + 12, 7, 1);
+        }
+        if (listSel == idx + 10) g.setRGB(C_TEXTLT); else g.setRGB(C_TEXT);
+        g.drawString(name, x + 26, y + 2);
+    }
+
+    static void drawSystem(int x, int y, int w, int h) {
+        infoRow("Kernel", "JVMOS-JIT 2.6", x, y + 6);
+        infoRow("Engine", "bytecode -> x86 JIT", x, y + 28);
+        infoRow("Video", "VESA 1024x768 32bpp", x, y + 50);
+        infoRow("Renderer", "double buffered", x, y + 72);
+
+        label("Uptime:", x, y + 100);
+        g.setRGB(C_TEXT);
+        int t = Native.sys(Native.SYS_GET_TICKS, 0, 0, 0, 0) / 1000;
+        int nx = g.drawInt(t, x + 88, y + 100);
+        g.drawString("s", nx, y + 100);
+
+        // SYS_KALLOC with size 0 returns the current bump pointer without
+        // allocating; subtracting the heap base gives the bytes handed out.
+        // 0xA00000 must match heap_start_ptr in boot/sys_api.asm.
+        label("Heap used:", x, y + 124);
+        g.setRGB(C_TEXT);
+        nx = g.drawInt(Native.sys(Native.SYS_KALLOC, 0, 0, 0, 0) - 0x00A00000, x + 88, y + 124);
+        g.drawString(" bytes", nx, y + 124);
+    }
+
+    static void infoRow(String k, String v, int x, int y) {
+        g.setRGB(C_TITLE_A);
+        g.drawString(k, x, y);
+        g.setRGB(C_TEXT);
+        g.drawString(v, x + 88, y);
+    }
+
+    static void drawAbout(int x, int y, int w, int h) {
+        g.setRGB(C_TITLE_A);
+        g.drawString("JVMOS / JIT", x + 8, y + 6);
+        g.setRGB(C_TEXT);
+        g.drawString("A baremetal operating system whose", x + 8, y + 34);
+        g.drawString("userland is Java bytecode compiled to", x + 8, y + 52);
+        g.drawString("native x86 at runtime.", x + 8, y + 70);
+        g.drawString("Kernel: NASM + C   UI: Java", x + 8, y + 98);
+        button(x + w / 2 - 42, y + h - 40, 84, 26, "Close", 5, boolInt(pressedBtn == 3));
+    }
+
+    // ======================================================================
+    // CONTENT INTERACTION
+    // ======================================================================
+    static void contentClick(int i) {
+        int cx = wx[i] + BORDER + 11;
+        int cy = wy[i] + TITLE_H + 10;
+        if (i == W_GALLERY) {
+            galleryClick(cx, cy);
+        } else if (i == W_FILES) {
+            filesClick(cx, cy, ww[i] - 2 * BORDER - 22);
+        } else if (i == W_ABOUT) {
+            aboutClick(cx, cy, i);
+        }
+        paint();
+    }
+
+    static void galleryClick(int x, int y) {
+        if (hit(mouseX, mouseY, x + 12, y + 26, 190, 14)) chkSound = 1 - chkSound;
+        if (hit(mouseX, mouseY, x + 12, y + 50, 190, 14)) chkGrid = 1 - chkGrid;
+        if (hit(mouseX, mouseY, x + 12, y + 74, 190, 14)) chkStatus = 1 - chkStatus;
+
+        if (hit(mouseX, mouseY, x + 236, y + 26, 190, 14)) radioSel = 0;
+        if (hit(mouseX, mouseY, x + 236, y + 50, 190, 14)) radioSel = 1;
+        if (hit(mouseX, mouseY, x + 236, y + 74, 190, 14)) radioSel = 2;
+
+        if (hit(mouseX, mouseY, x + 68, y + 118, 200, 22)) fieldFocus = 1;
+        else fieldFocus = 0;
+
+        if (hit(mouseX, mouseY, x + 12, y + 190, 84, 26)) {
+            pressedBtn = 0;
+            progress = progress - 10;
+            if (progress < 0) progress = 0;
+            if (chkSound == 1) clickTone();
+        }
+        if (hit(mouseX, mouseY, x + 104, y + 190, 84, 26)) {
+            pressedBtn = 1;
+            progress = progress + 10;
+            if (progress > 100) progress = 100;
+            if (chkSound == 1) clickTone();
+        }
+        if (hit(mouseX, mouseY, x + 196, y + 190, 84, 26)) {
+            pressedBtn = 2;
+            note(880, 90);
+        }
+
+        int row = 0;
+        while (row < 5) {
+            if (hit(mouseX, mouseY, x + 16, y + 254 + row * 20, 262, 18)) listSel = row;
+            row = row + 1;
+        }
+    }
+
+    static void filesClick(int x, int y, int w) {
+        int row = 0;
+        while (row < 6) {
+            if (hit(mouseX, mouseY, x, y + 30 + row * 24, w, 20)) {
+                listSel = row + 10;
+                if (chkSound == 1) clickTone();
+            }
+            row = row + 1;
+        }
+    }
+
+    // x,y are the content origin; recompute the content box exactly as
+    // drawWindow does so the hit box matches the drawn button.
+    static void aboutClick(int x, int y, int i) {
+        int cw = ww[i] - 2 * BORDER - 22;
+        int ch = wh[i] - TITLE_H - BORDER - 21;
+        if (hit(mouseX, mouseY, x + cw / 2 - 42, y + ch - 40, 84, 26)) {
+            wOpen[W_ABOUT] = 0;
+            clickTone();
+        }
+    }
+
+    // ======================================================================
+    // SHUTDOWN
+    // ======================================================================
+    static void shutdown() {
+        g.setRGB(0x00000000);
+        g.fillRect(0, 0, SCR_W, SCR_H);
+        g.setRGB(C_RED);
+        g.drawString("Shutting down JVMOS...", 400, 370);
+        g.present();
+        note(660, 160);
+        note(440, 320);
+        Native.sys(Native.SYS_SLEEP, 400, 0, 0, 0);
+        Native.sys(Native.SYS_EXIT, 0, 0, 0, 0);
     }
 }

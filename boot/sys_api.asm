@@ -48,7 +48,9 @@ global sys_fill_arc
 global sys_draw_polygon
 global sys_fill_polygon
 global sys_draw_string
+global sys_present
 global current_color
+global vram_back_buffer
 
 ; --- Disco ATA IDE LBA28 ---
 global sys_disk_read_sector
@@ -78,7 +80,15 @@ global sys_wait_io
 ; Externos del Kernel/Framebuffer
 extern g_framebuffer
 extern g_pitch
+extern g_height
 extern draw_char_vram
+
+; DOBLE BUFFER: todo el dibujo va aquí, sys_present() lo copia a la VRAM real
+; de una sola vez, evitando el parpadeo de escribir directo sobre pantalla.
+; Mapa de memoria: JIT 0x200000-0x600000 | back buffer 0x600000-0xA00000 | heap 0xA00000+
+section .data
+align 16
+vram_back_buffer: dd 0x00600000
 
 ; SECCIÓN BSS (MEMORIA NO INICIALIZADA)
 section .bss
@@ -129,7 +139,7 @@ sys_hardware_init:
     mov dword [mouse_btn], 0
     mov dword [sys_ticks], 0
     mov dword [heap_curr_ptr], 0
-    mov dword [heap_start_ptr], 0x00400000
+    mov dword [heap_start_ptr], 0x00A00000  ; el heap arranca tras el back buffer
     mov dword [current_color], 0xFFFFFFFF
 
     call sys_init_keyboard
@@ -519,7 +529,7 @@ sys_kalloc:
     cmp eax, 0
     jne .set_start
 
-    mov eax, 0x00400000
+    mov eax, 0x00A00000
 
 .set_start:
     mov [heap_curr_ptr], eax
@@ -559,7 +569,7 @@ sys_kalloc:
 sys_get_free_mem:
     cmp dword [heap_curr_ptr], 0
     jne .ok
-    mov dword [heap_curr_ptr], 0x00400000
+    mov dword [heap_curr_ptr], 0x00A00000
 .ok:
     ; Memoria libre = RAM total (128MB) - Puntero actual del Heap
     mov eax, 0x08000000
@@ -860,7 +870,7 @@ sys_draw_pixel:
     imul ecx, [g_pitch]
     shl eax, 2
     add ecx, eax
-    mov eax, [g_framebuffer]
+    mov eax, [vram_back_buffer]
     add eax, ecx
     mov [eax], edx
     pop ebp
@@ -874,7 +884,7 @@ sys_get_pixel:
     imul ecx, [g_pitch]
     shl eax, 2
     add ecx, eax
-    mov eax, [g_framebuffer]
+    mov eax, [vram_back_buffer]
     add eax, ecx
     mov eax, [eax]
     pop ebp
@@ -900,7 +910,7 @@ sys_fill_rect:
     mov eax, [ebp + 8]          ; x
     shl eax, 2
     add ecx, eax
-    mov edi, [g_framebuffer]
+    mov edi, [vram_back_buffer]
     add edi, ecx
     mov ecx, ebx
     mov eax, esi
@@ -914,6 +924,25 @@ sys_fill_rect:
     pop ebx
     pop edi
     pop ebp
+    ret
+
+; Copia el buffer trasero completo a la VRAM real de una sola vez.
+; Se llama una vez por frame ya compuesto, evitando el parpadeo de
+; escribir directo sobre pantalla mientras se dibuja.
+sys_present:
+    push edi
+    push esi
+    push ecx
+    mov esi, [vram_back_buffer]
+    mov edi, [g_framebuffer]
+    mov ecx, [g_pitch]
+    imul ecx, [g_height]
+    shr ecx, 2                  ; bytes -> dwords
+    cld
+    rep movsd
+    pop ecx
+    pop esi
+    pop edi
     ret
 
 sys_draw_rect:
@@ -1092,7 +1121,7 @@ sys_draw_string:
     popa
     
 .skip_char:
-    add ebx, 10
+    add ebx, 8                  ; avance = ancho real del glifo (8px), sin hueco extra
     inc esi
     dec ecx
     jnz .char
