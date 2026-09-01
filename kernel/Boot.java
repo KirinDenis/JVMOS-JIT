@@ -97,6 +97,33 @@ public class Boot {
     static final int DRAG_MOVE = 1;
     static final int DRAG_SIZE = 2;
 
+    // ---- keyboard ---------------------------------------------------------
+    // SYS_READ_KEYBOARD returns: modifier bits | key code, where key codes
+    // above 0xFF are 0x100 + PS/2 scancode (arrows, function keys, ...).
+    static final int K_MASK = 0xFFFF;
+    static final int M_ALT = 0x10000;
+    static final int M_CTRL = 0x20000;
+    static final int M_SHIFT = 0x40000;
+    static final int K_BACK = 8;
+    static final int K_TAB = 9;
+    static final int K_ENTER = 13;
+    static final int K_ESC = 27;
+    static final int K_SPACE = 32;
+    static final int K_F4 = 0x13E;
+    static final int K_F10 = 0x144;
+    static final int K_UP = 0x148;
+    static final int K_LEFT = 0x14B;
+    static final int K_RIGHT = 0x14D;
+    static final int K_DOWN = 0x150;
+
+    // focusable control ids inside the gallery
+    static final int F_CHK1 = 0;
+    static final int F_RADIO1 = 3;
+    static final int F_FIELD = 6;
+    static final int F_BTN1 = 7;
+    static final int F_LIST = 10;
+    static final int F_GALLERY_N = 11;
+
     // ---- runtime state (never field-initialized, see initState) ----------
     static Graphics2D g;
 
@@ -115,11 +142,13 @@ public class Boot {
     static int chkSound, chkGrid, chkStatus;
     static int radioSel;
     static int progress;
-    static int listSel;
+    static int modSel;                  // selected row in the Modules list
+    static int fileSel;                 // selected row in the File Manager
     static int fieldFocus, fieldLen;
     static int[] fieldBuf;
     static int pressedBtn;              // -1 none, else button id
     static int lastKey;
+    static int[] focus;                 // focused control per window
 
     // ======================================================================
     // ENTRY POINT
@@ -152,6 +181,7 @@ public class Boot {
         rw = new int[WIN_COUNT];
         rh = new int[WIN_COUNT];
         zorder = new int[WIN_COUNT];
+        focus = new int[WIN_COUNT];
         fieldBuf = new int[24];
 
         setWin(W_GALLERY, 60, 60, 520, 430);
@@ -187,7 +217,8 @@ public class Boot {
         chkStatus = 0;
         radioSel = 1;
         progress = 45;
-        listSel = 0;
+        modSel = 0;
+        fileSel = 0;
         fieldFocus = 0;
         fieldLen = 0;
     }
@@ -297,31 +328,211 @@ public class Boot {
     }
 
     static void handleKeys() {
-        int k = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
-        if (k == 0) {
+        int raw = Native.sys(Native.SYS_READ_KEYBOARD, 0, 0, 0, 0);
+        if (raw == 0) {
             lastKey = 0;
             return;
         }
-        if (k == lastKey) return;
-        lastKey = k;
+        if (raw == lastKey) return;     // crude auto-repeat suppression
+        lastKey = raw;
 
-        if (k == 27) {
-            menuOpen = -1;
-            fieldFocus = 0;
+        int code = raw & K_MASK;
+        int top = zorder[WIN_COUNT - 1];
+
+        if ((raw & M_ALT) != 0) {
+            if (code == K_F4) {
+                wOpen[top] = 0;
+                clickTone();
+                paint();
+                return;
+            }
+            if (code == K_TAB) {
+                cycleWindow();
+                paint();
+                return;
+            }
+        }
+
+        if (code == K_F10) {
+            if (menuOpen < 0) menuOpen = 0; else menuOpen = -1;
             paint();
             return;
         }
-        if (fieldFocus == 0) return;
 
-        if (k == 8) {
-            if (fieldLen > 0) fieldLen = fieldLen - 1;
-        } else if (k >= 32 && k <= 126) {
-            if (fieldLen < 20) {
-                fieldBuf[fieldLen] = k;
-                fieldLen = fieldLen + 1;
+        if (menuOpen >= 0) {
+            menuKey(code);
+            return;
+        }
+
+        if (code == K_ESC) {
+            fieldFocus = 0;
+            if (wOpen[W_ABOUT] == 1) wOpen[W_ABOUT] = 0;
+            paint();
+            return;
+        }
+
+        // A focused text field swallows printable keys and backspace.
+        if (fieldFocus == 1) {
+            if (code == K_BACK) {
+                if (fieldLen > 0) fieldLen = fieldLen - 1;
+                paint();
+                return;
+            }
+            if (code >= 32 && code <= 126) {
+                if (fieldLen < 20) {
+                    fieldBuf[fieldLen] = code;
+                    fieldLen = fieldLen + 1;
+                }
+                paint();
+                return;
             }
         }
+
+        if (code == K_TAB) {
+            if ((raw & M_SHIFT) != 0) moveFocus(top, -1); else moveFocus(top, 1);
+            paint();
+            return;
+        }
+        if (code == K_DOWN || code == K_RIGHT) {
+            stepDown(top);
+            paint();
+            return;
+        }
+        if (code == K_UP || code == K_LEFT) {
+            stepUp(top);
+            paint();
+            return;
+        }
+        if (code == K_SPACE || code == K_ENTER) {
+            activate(top);
+            paint();
+            return;
+        }
+    }
+
+    static void menuKey(int code) {
+        if (code == K_ESC) {
+            menuOpen = -1;
+        } else if (code == K_RIGHT) {
+            menuOpen = menuOpen + 1;
+            if (menuOpen > 2) menuOpen = 0;
+        } else if (code == K_LEFT) {
+            menuOpen = menuOpen - 1;
+            if (menuOpen < 0) menuOpen = 2;
+        }
         paint();
+    }
+
+    static int focusCount(int i) {
+        if (i == W_GALLERY) return F_GALLERY_N;
+        if (i == W_FILES) return 1;
+        if (i == W_ABOUT) return 1;
+        return 0;
+    }
+
+    static void setFocus(int i, int idx) {
+        focus[i] = idx;
+        if (i == W_GALLERY && idx == F_FIELD) fieldFocus = 1; else fieldFocus = 0;
+    }
+
+    static void moveFocus(int i, int dir) {
+        int n = focusCount(i);
+        if (n == 0) return;
+        int f = focus[i] + dir;
+        if (f < 0) f = n - 1;
+        if (f >= n) f = 0;
+        setFocus(i, f);
+    }
+
+    // Down/Right: inside a list move the selection, otherwise move the focus.
+    static void stepDown(int i) {
+        if (i == W_FILES) {
+            if (fileSel < 5) fileSel = fileSel + 1;
+            return;
+        }
+        if (i == W_GALLERY && focus[i] == F_LIST) {
+            if (modSel < 4) modSel = modSel + 1;
+            return;
+        }
+        moveFocus(i, 1);
+    }
+
+    static void stepUp(int i) {
+        if (i == W_FILES) {
+            if (fileSel > 0) fileSel = fileSel - 1;
+            return;
+        }
+        if (i == W_GALLERY && focus[i] == F_LIST) {
+            if (modSel > 0) modSel = modSel - 1;
+            return;
+        }
+        moveFocus(i, -1);
+    }
+
+    static void activate(int i) {
+        int f = focus[i];
+        if (i == W_ABOUT) {
+            wOpen[W_ABOUT] = 0;
+            clickTone();
+            return;
+        }
+        if (i != W_GALLERY) return;
+
+        if (f == 0) chkSound = 1 - chkSound;
+        else if (f == 1) chkGrid = 1 - chkGrid;
+        else if (f == 2) chkStatus = 1 - chkStatus;
+        else if (f == 3) radioSel = 0;
+        else if (f == 4) radioSel = 1;
+        else if (f == 5) radioSel = 2;
+        else if (f == 7) {
+            progress = progress - 10;
+            if (progress < 0) progress = 0;
+        } else if (f == 8) {
+            progress = progress + 10;
+            if (progress > 100) progress = 100;
+        } else if (f == 9) {
+            note(880, 90);
+            return;
+        }
+        if (chkSound == 1) clickTone();
+    }
+
+    // Alt+Tab: send the front window to the back, skipping closed ones.
+    static void cycleWindow() {
+        int k = 0;
+        while (k < WIN_COUNT) {
+            int front = zorder[WIN_COUNT - 1];
+            int j = WIN_COUNT - 1;
+            while (j > 0) {
+                zorder[j] = zorder[j - 1];
+                j = j - 1;
+            }
+            zorder[0] = front;
+            int cand = zorder[WIN_COUNT - 1];
+            if (wOpen[cand] == 1 && wMin[cand] == 0) return;
+            k = k + 1;
+        }
+    }
+
+    static boolean isActive(int i) {
+        return zorder[WIN_COUNT - 1] == i;
+    }
+
+    // Dotted focus rectangle, Turbo Vision style.
+    static void focusRing(int x, int y, int w, int h) {
+        g.setRGB(C_TEXT);
+        int p = 0;
+        while (p < w) {
+            g.fillRect(x + p, y, 1, 1);
+            g.fillRect(x + p, y + h - 1, 1, 1);
+            p = p + 2;
+        }
+        p = 0;
+        while (p < h) {
+            g.fillRect(x, y + p, 1, 1);
+            g.fillRect(x + w - 1, y + p, 1, 1);
+            p = p + 2;
+        }
     }
 
     // ======================================================================
@@ -662,7 +873,11 @@ public class Boot {
         int cw = w - 2 * BORDER - 10;
         int chh = h - TITLE_H - BORDER - 9;
         panel(cx, cy, cw, chh, C_FACE, 0);
+        // Clip the content to the client area: shrinking a window must cut the
+        // content off at the frame instead of letting it spill onto the desktop.
+        g.setClip(cx + 1, cy + 1, cw - 2, chh - 2);
         drawContent(i, cx + 6, cy + 6, cw - 12, chh - 12);
+        g.setClip(0, 0, SCR_W, SCR_H);
 
         if (wMax[i] == 0) drawGrip(x + w - GRIP - 2, y + h - GRIP - 2);
     }
@@ -905,7 +1120,7 @@ public class Boot {
     }
 
     static void listRow(String label, int x, int y, int w, int idx) {
-        if (listSel == idx) {
+        if (modSel == idx) {
             g.setRGB(C_SEL);
             g.fillRect(x, y, w, 18);
             g.setRGB(C_TEXTLT);
@@ -944,6 +1159,8 @@ public class Boot {
     }
 
     static void drawGallery(int x, int y, int w, int h) {
+        boolean act = isActive(W_GALLERY);
+
         groupBox(x, y + 8, 210, 96, "Options");
         checkbox(x + 12, y + 26, "Sound enabled", chkSound);
         checkbox(x + 12, y + 50, "Desktop grid", chkGrid);
@@ -965,12 +1182,35 @@ public class Boot {
         button(x + 104, y + 190, 84, 26, "Plus", 4, boolInt(pressedBtn == 1));
         button(x + 196, y + 190, 84, 26, "Beep", 4, boolInt(pressedBtn == 2));
 
-        groupBox(x + 12, y + 236, 270, 118, "Modules");
-        listRow("kernel.Boot", x + 16, y + 254, 262, 0);
-        listRow("java.awt.Graphics2D", x + 16, y + 274, 262, 1);
-        listRow("java.io.PrintStream", x + 16, y + 294, 262, 2);
-        listRow("java.util.Calendar", x + 16, y + 314, 262, 3);
-        listRow("kernel.Native", x + 16, y + 334, 262, 4);
+        // The list only shows as many rows as the current window height allows.
+        int rows = (y + h - (y + 254)) / 20;
+        if (rows > 5) rows = 5;
+        if (rows > 0) {
+            int boxH = rows * 20 + 18;
+            groupBox(x + 12, y + 236, 270, boxH, "Modules");
+            if (rows > 0) listRow("kernel.Boot", x + 16, y + 254, 262, 0);
+            if (rows > 1) listRow("java.awt.Graphics2D", x + 16, y + 274, 262, 1);
+            if (rows > 2) listRow("java.io.PrintStream", x + 16, y + 294, 262, 2);
+            if (rows > 3) listRow("java.util.Calendar", x + 16, y + 314, 262, 3);
+            if (rows > 4) listRow("kernel.Native", x + 16, y + 334, 262, 4);
+        }
+
+        if (act) drawGalleryFocus(x, y, rows);
+    }
+
+    static void drawGalleryFocus(int x, int y, int rows) {
+        int f = focus[W_GALLERY];
+        if (f == 0) focusRing(x + 8, y + 22, 190, 22);
+        else if (f == 1) focusRing(x + 8, y + 46, 190, 22);
+        else if (f == 2) focusRing(x + 8, y + 70, 190, 22);
+        else if (f == 3) focusRing(x + 232, y + 22, 130, 22);
+        else if (f == 4) focusRing(x + 232, y + 46, 130, 22);
+        else if (f == 5) focusRing(x + 232, y + 70, 130, 22);
+        else if (f == 6) focusRing(x + 66, y + 116, 204, 26);
+        else if (f == 7) focusRing(x + 10, y + 188, 88, 30);
+        else if (f == 8) focusRing(x + 102, y + 188, 88, 30);
+        else if (f == 9) focusRing(x + 194, y + 188, 88, 30);
+        else if (f == 10 && rows > 0) focusRing(x + 14, y + 250, 266, rows * 20 + 6);
     }
 
     static void drawPercent(int v, int x, int y) {
@@ -989,16 +1229,25 @@ public class Boot {
         g.setRGB(C_TEXT);
         g.drawString("/ (root)", x + 8, y + 3);
 
-        fileRow("APPS", x, y + 30, w, 0, 1);
-        fileRow("DOCS", x, y + 54, w, 1, 1);
-        fileRow("SYSTEM", x, y + 78, w, 2, 1);
-        fileRow("README.TXT", x, y + 102, w, 3, 0);
-        fileRow("BOOT.LOG", x, y + 126, w, 4, 0);
-        fileRow("PAINT.CLASS", x, y + 150, w, 5, 0);
+        // Rows follow the window height, and each row spans the full width.
+        int rows = (h - 30) / 24;
+        if (rows > 6) rows = 6;
+        if (rows > 0) fileRow("APPS", x, y + 30, w, 0, 1);
+        if (rows > 1) fileRow("DOCS", x, y + 54, w, 1, 1);
+        if (rows > 2) fileRow("SYSTEM", x, y + 78, w, 2, 1);
+        if (rows > 3) fileRow("README.TXT", x, y + 102, w, 3, 0);
+        if (rows > 4) fileRow("BOOT.LOG", x, y + 126, w, 4, 0);
+        if (rows > 5) fileRow("PAINT.CLASS", x, y + 150, w, 5, 0);
+
+        if (isActive(W_FILES) && rows > 0) {
+            int sel = fileSel;
+            if (sel >= rows) sel = rows - 1;
+            focusRing(x, y + 28 + sel * 24, w, 24);
+        }
     }
 
     static void fileRow(String name, int x, int y, int w, int idx, int isDir) {
-        if (listSel == idx + 10) {
+        if (fileSel == idx) {
             g.setRGB(C_SEL);
             g.fillRect(x, y, w, 20);
         }
@@ -1014,15 +1263,16 @@ public class Boot {
             g.fillRect(x + 8, y + 9, 7, 1);
             g.fillRect(x + 8, y + 12, 7, 1);
         }
-        if (listSel == idx + 10) g.setRGB(C_TEXTLT); else g.setRGB(C_TEXT);
+        if (fileSel == idx) g.setRGB(C_TEXTLT); else g.setRGB(C_TEXT);
         g.drawString(name, x + 26, y + 2);
     }
 
     static void drawSystem(int x, int y, int w, int h) {
         infoRow("Kernel", "JVMOS-JIT 2.6", x, y + 6);
-        infoRow("Engine", "bytecode -> x86 JIT", x, y + 28);
-        infoRow("Video", "VESA 1024x768 32bpp", x, y + 50);
-        infoRow("Renderer", "double buffered", x, y + 72);
+        if (h > 44) infoRow("Engine", "bytecode -> x86 JIT", x, y + 28);
+        if (h > 66) infoRow("Video", "VESA 1024x768 32bpp", x, y + 50);
+        if (h > 88) infoRow("Renderer", "double buffered", x, y + 72);
+        if (h < 140) return;
 
         label("Uptime:", x, y + 100);
         g.setRGB(C_TEXT);
@@ -1055,6 +1305,7 @@ public class Boot {
         g.drawString("native x86 at runtime.", x + 8, y + 70);
         g.drawString("Kernel: NASM + C   UI: Java", x + 8, y + 98);
         button(x + w / 2 - 42, y + h - 40, 84, 26, "Close", 5, boolInt(pressedBtn == 3));
+        if (isActive(W_ABOUT)) focusRing(x + w / 2 - 44, y + h - 42, 88, 30);
     }
 
     // ======================================================================
@@ -1073,38 +1324,63 @@ public class Boot {
         paint();
     }
 
+    // Clicking a control also gives it the keyboard focus, so mouse and
+    // keyboard always agree on what is currently selected.
     static void galleryClick(int x, int y) {
-        if (hit(mouseX, mouseY, x + 12, y + 26, 190, 14)) chkSound = 1 - chkSound;
-        if (hit(mouseX, mouseY, x + 12, y + 50, 190, 14)) chkGrid = 1 - chkGrid;
-        if (hit(mouseX, mouseY, x + 12, y + 74, 190, 14)) chkStatus = 1 - chkStatus;
+        if (hit(mouseX, mouseY, x + 12, y + 26, 190, 14)) {
+            chkSound = 1 - chkSound;
+            setFocus(W_GALLERY, 0);
+        }
+        if (hit(mouseX, mouseY, x + 12, y + 50, 190, 14)) {
+            chkGrid = 1 - chkGrid;
+            setFocus(W_GALLERY, 1);
+        }
+        if (hit(mouseX, mouseY, x + 12, y + 74, 190, 14)) {
+            chkStatus = 1 - chkStatus;
+            setFocus(W_GALLERY, 2);
+        }
 
-        if (hit(mouseX, mouseY, x + 236, y + 26, 190, 14)) radioSel = 0;
-        if (hit(mouseX, mouseY, x + 236, y + 50, 190, 14)) radioSel = 1;
-        if (hit(mouseX, mouseY, x + 236, y + 74, 190, 14)) radioSel = 2;
+        if (hit(mouseX, mouseY, x + 236, y + 26, 190, 14)) {
+            radioSel = 0;
+            setFocus(W_GALLERY, 3);
+        }
+        if (hit(mouseX, mouseY, x + 236, y + 50, 190, 14)) {
+            radioSel = 1;
+            setFocus(W_GALLERY, 4);
+        }
+        if (hit(mouseX, mouseY, x + 236, y + 74, 190, 14)) {
+            radioSel = 2;
+            setFocus(W_GALLERY, 5);
+        }
 
-        if (hit(mouseX, mouseY, x + 68, y + 118, 200, 22)) fieldFocus = 1;
-        else fieldFocus = 0;
+        if (hit(mouseX, mouseY, x + 68, y + 118, 200, 22)) setFocus(W_GALLERY, F_FIELD);
 
         if (hit(mouseX, mouseY, x + 12, y + 190, 84, 26)) {
             pressedBtn = 0;
+            setFocus(W_GALLERY, 7);
             progress = progress - 10;
             if (progress < 0) progress = 0;
             if (chkSound == 1) clickTone();
         }
         if (hit(mouseX, mouseY, x + 104, y + 190, 84, 26)) {
             pressedBtn = 1;
+            setFocus(W_GALLERY, 8);
             progress = progress + 10;
             if (progress > 100) progress = 100;
             if (chkSound == 1) clickTone();
         }
         if (hit(mouseX, mouseY, x + 196, y + 190, 84, 26)) {
             pressedBtn = 2;
+            setFocus(W_GALLERY, 9);
             note(880, 90);
         }
 
         int row = 0;
         while (row < 5) {
-            if (hit(mouseX, mouseY, x + 16, y + 254 + row * 20, 262, 18)) listSel = row;
+            if (hit(mouseX, mouseY, x + 16, y + 254 + row * 20, 262, 18)) {
+                modSel = row;
+                setFocus(W_GALLERY, F_LIST);
+            }
             row = row + 1;
         }
     }
@@ -1113,7 +1389,7 @@ public class Boot {
         int row = 0;
         while (row < 6) {
             if (hit(mouseX, mouseY, x, y + 30 + row * 24, w, 20)) {
-                listSel = row + 10;
+                fileSel = row;
                 if (chkSound == 1) clickTone();
             }
             row = row + 1;

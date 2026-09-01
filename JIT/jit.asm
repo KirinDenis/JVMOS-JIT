@@ -53,7 +53,7 @@ section .text
 	extern draw_char_vram, sys_draw_string, sys_serial_puts, sys_serial_putc, sys_serial_print_java
 	extern current_color
 	extern sys_read_keyboard_scancode, sys_set_keyboard_layout, sys_read_mouse
-	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel, sys_present
+	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel, sys_present, sys_set_clip
 	extern sys_beep, sys_nosound, sys_get_free_mem, sys_get_ram_size
 	extern sys_pci_read_config, sys_disk_read_sector, sys_disk_write_sector
 	extern sys_rtl8139_init, sys_rtl8139_send_packet, sys_net_receive_packet
@@ -334,6 +334,8 @@ sys_native_dispatch:
     je .sys_net_receive_packet
     cmp eax, 26
     je .sys_present
+    cmp eax, 27
+    je .sys_set_clip
 
     xor eax, eax
     jmp .done
@@ -525,6 +527,16 @@ sys_native_dispatch:
 
 .sys_present:
     call sys_present
+    xor eax, eax
+    jmp .done
+
+.sys_set_clip:
+    push dword [sys_arg_d]
+    push dword [sys_arg_c]
+    push dword [sys_arg_b]
+    push dword [sys_arg_a]
+    call sys_set_clip
+    add esp, 16
     xor eax, eax
     jmp .done
 

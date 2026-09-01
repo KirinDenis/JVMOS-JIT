@@ -49,8 +49,13 @@ global sys_draw_polygon
 global sys_fill_polygon
 global sys_draw_string
 global sys_present
+global sys_set_clip
 global current_color
 global vram_back_buffer
+global clip_x
+global clip_y
+global clip_x2
+global clip_y2
 
 ; --- Disco ATA IDE LBA28 ---
 global sys_disk_read_sector
@@ -80,6 +85,7 @@ global sys_wait_io
 ; Externos del Kernel/Framebuffer
 extern g_framebuffer
 extern g_pitch
+extern g_width
 extern g_height
 extern draw_char_vram
 
@@ -89,6 +95,14 @@ extern draw_char_vram
 section .data
 align 16
 vram_back_buffer: dd 0x00600000
+
+; RECTÁNGULO DE RECORTE: fill_rect, draw_pixel y draw_char_vram descartan todo
+; lo que caiga fuera. Permite que una ventana dibuje su contenido sin salirse
+; de su marco. x2/y2 son exclusivos. sys_hardware_init lo abre a pantalla completa.
+clip_x:  dd 0
+clip_y:  dd 0
+clip_x2: dd 1024
+clip_y2: dd 768
 
 ; SECCIÓN BSS (MEMORIA NO INICIALIZADA)
 section .bss
@@ -104,6 +118,9 @@ kbd_fifo_head       resd 1
 kbd_fifo_tail       resd 1
 kbd_layout          resd 1          ; 0=US, 1=LATAM
 kbd_shift_state     resb 1
+kbd_ctrl_state      resb 1
+kbd_alt_state       resb 1
+kbd_e0              resb 1          ; prefijo 0xE0 pendiente (teclas extendidas)
 
 mouse_cycle         resb 1
 mouse_byte          resb 3
@@ -133,6 +150,9 @@ sys_hardware_init:
     mov dword [kbd_fifo_tail], 0
     mov byte  [kbd_shift_state], 0
     mov dword [kbd_layout], 1       ; Por defecto LATAM/Español activo
+    mov byte  [kbd_ctrl_state], 0
+    mov byte  [kbd_alt_state], 0
+    mov byte  [kbd_e0], 0
     mov byte  [mouse_cycle], 0
     mov dword [mouse_x], 512
     mov dword [mouse_y], 384
@@ -141,6 +161,14 @@ sys_hardware_init:
     mov dword [heap_curr_ptr], 0
     mov dword [heap_start_ptr], 0x00A00000  ; el heap arranca tras el back buffer
     mov dword [current_color], 0xFFFFFFFF
+
+    ; Recorte abierto a toda la pantalla
+    mov dword [clip_x], 0
+    mov dword [clip_y], 0
+    mov eax, [g_width]
+    mov [clip_x2], eax
+    mov eax, [g_height]
+    mov [clip_y2], eax
 
     call sys_init_keyboard
     call sys_init_mouse
@@ -351,42 +379,83 @@ irq0_timer_handler:
     popa
     iret
 
-; IRQ1: MANEJADOR DE TECLADO PS/2 MEJORADO
+; IRQ1: TECLADO PS/2
+; Mantiene el estado de SHIFT/CTRL/ALT y el prefijo 0xE0 de las teclas
+; extendidas (flechas, Supr, Inicio...). En el FIFO sólo entran pulsaciones de
+; teclas normales; el bit 7 del byte encolado marca "era una tecla extendida",
+; ya que las liberaciones nunca se encolan y ese bit queda libre.
 irq1_keyboard_handler:
     pusha
     in al, 0x60
 
-    ; Evaluar estados de SHIFT (0x2A / 0x36 presionado, 0xAA / 0xB6 liberado)
-    cmp al, 0x2A
-    je .shift_on
-    cmp al, 0x36
-    je .shift_on
-    cmp al, 0xAA
-    je .shift_off
-    cmp al, 0xB6
-    je .shift_off
+    ; Prefijo de tecla extendida: se recuerda y se espera al siguiente byte
+    cmp al, 0xE0
+    jne .not_prefix
+    mov byte [kbd_e0], 1
+    jmp .eoi_only
+.not_prefix:
 
-    ; Ignorar cualquier evento de liberación de tecla (bit 7)
+    mov bl, al
+    and bl, 0x7F                ; scancode base
+    mov bh, al
+    and bh, 0x80                ; 0 = pulsada, 0x80 = liberada
+
+    cmp bl, 0x2A
+    je .mod_shift
+    cmp bl, 0x36
+    je .mod_shift
+    cmp bl, 0x1D
+    je .mod_ctrl
+    cmp bl, 0x38
+    je .mod_alt
+
+    ; Tecla normal: las liberaciones no interesan
     test al, 0x80
-    jnz .eoi_only
+    jnz .clear_prefix
 
-    ; Almacenar el Scancode en el FIFO circular
-    mov ebx, [kbd_fifo_tail]
-    mov ecx, ebx
-    inc ecx
-    and ecx, 0xFF
-    cmp ecx, [kbd_fifo_head]
-    je .eoi_only
+    ; Marcar extendida en el bit 7 del valor encolado
+    cmp byte [kbd_e0], 0
+    je .queue
+    or bl, 0x80
+.queue:
+    mov ecx, [kbd_fifo_tail]
+    mov edx, ecx
+    inc edx
+    and edx, 0xFF
+    cmp edx, [kbd_fifo_head]
+    je .clear_prefix            ; FIFO lleno: se descarta
+    mov [kbd_fifo_buf + ecx], bl
+    mov [kbd_fifo_tail], edx
+    jmp .clear_prefix
 
-    mov [kbd_fifo_buf + ebx], al
-    mov [kbd_fifo_tail], ecx
-    jmp .eoi_only
-
-.shift_on:
+.mod_shift:
+    test bh, bh
+    jnz .shift_up
     mov byte [kbd_shift_state], 1
-    jmp .eoi_only
-.shift_off:
+    jmp .clear_prefix
+.shift_up:
     mov byte [kbd_shift_state], 0
+    jmp .clear_prefix
+
+.mod_ctrl:
+    test bh, bh
+    jnz .ctrl_up
+    mov byte [kbd_ctrl_state], 1
+    jmp .clear_prefix
+.ctrl_up:
+    mov byte [kbd_ctrl_state], 0
+    jmp .clear_prefix
+
+.mod_alt:
+    test bh, bh
+    jnz .alt_up
+    mov byte [kbd_alt_state], 1
+    jmp .clear_prefix
+.alt_up:
+    mov byte [kbd_alt_state], 0
+
+.clear_prefix:
+    mov byte [kbd_e0], 0
 
 .eoi_only:
     mov al, 0x20
@@ -733,37 +802,83 @@ sys_set_keyboard_layout:
     pop ebp
     ret
 
-; Lectura de FIFO sin Polling invasivo
+; Lectura de FIFO sin polling invasivo.
+; Devuelve 0 si no hay tecla. En otro caso:
+;   bits 0-15  : ASCII imprimible, o 0x100+scancode para teclas especiales
+;                (flechas, F1-F12, Inicio/Fin/Supr...)
+;   bit 16     : ALT pulsado
+;   bit 17     : CTRL pulsado
+;   bit 18     : SHIFT pulsado
 sys_read_keyboard_scancode:
     push ebx
     push ecx
     push edx
-    
-    xor eax, eax                ; Asegurar EAX en 0 desde el principio
-    
+
+    xor eax, eax
     mov ebx, [kbd_fifo_head]
     cmp ebx, [kbd_fifo_tail]
-    je .done                    ; Saltar directamente si está vacío
-    
-    mov al, byte [kbd_fifo_buf + ebx]
+    je .done                    ; FIFO vacío
+
+    movzx eax, byte [kbd_fifo_buf + ebx]
     inc ebx
     and ebx, 0xFF
     mov [kbd_fifo_head], ebx
-    
-    cmp eax, 128
-    jge .empty                  ; Si es un scancode de liberación (>128), retornar 0
-    
-    mov al, [kbd_ascii_map + eax]
-    movzx eax, al
-    
-    cmp al, 'A'
-    jl .done
-    cmp al, 'Z'
-    jg .done
-    add al, 32                  ; Convertir a minúscula
+
+    xor edx, edx                ; edx = 1 si la tecla era extendida
+    test al, 0x80
+    jz .not_extended
+    and eax, 0x7F
+    mov edx, 1
+.not_extended:
+
+    test edx, edx
+    jnz .special                ; toda tecla extendida es especial
+
+    ; F1-F10 = 0x3B-0x44, F11 = 0x57, F12 = 0x58
+    cmp al, 0x3B
+    jb .as_ascii
+    cmp al, 0x44
+    jbe .special
+    cmp al, 0x57
+    je .special
+    cmp al, 0x58
+    je .special
+
+.as_ascii:
+    movzx ecx, byte [kbd_ascii_map + eax]
+    test ecx, ecx
+    jz .none                    ; tecla sin equivalente imprimible
+
+    ; El mapa guarda mayúsculas: sin SHIFT se pasa a minúscula
+    cmp cl, 'A'
+    jb .have_char
+    cmp cl, 'Z'
+    ja .have_char
+    cmp byte [kbd_shift_state], 0
+    jne .have_char
+    add cl, 32
+.have_char:
+    mov eax, ecx
+    jmp .modifiers
+
+.special:
+    add eax, 0x100
+
+.modifiers:
+    cmp byte [kbd_alt_state], 0
+    je .no_alt
+    or eax, 0x10000
+.no_alt:
+    cmp byte [kbd_ctrl_state], 0
+    je .no_ctrl
+    or eax, 0x20000
+.no_ctrl:
+    cmp byte [kbd_shift_state], 0
+    je .done
+    or eax, 0x40000
     jmp .done
 
-.empty:
+.none:
     xor eax, eax
 .done:
     pop edx
@@ -861,11 +976,38 @@ sys_set_color:
     pop ebp
     ret
 
+; sys_set_clip(x, y, w, h): limita todo el dibujo posterior a ese rectángulo
+sys_set_clip:
+    push ebp
+    mov ebp, esp
+    push eax
+    mov eax, [ebp + 8]
+    mov [clip_x], eax
+    add eax, [ebp + 16]
+    mov [clip_x2], eax
+    mov eax, [ebp + 12]
+    mov [clip_y], eax
+    add eax, [ebp + 20]
+    mov [clip_y2], eax
+    pop eax
+    pop ebp
+    ret
+
 sys_draw_pixel:
     push ebp
     mov ebp, esp
     mov eax, [ebp + 8]          ; x
     mov ecx, [ebp + 12]         ; y
+
+    cmp eax, [clip_x]
+    jl .skip
+    cmp eax, [clip_x2]
+    jge .skip
+    cmp ecx, [clip_y]
+    jl .skip
+    cmp ecx, [clip_y2]
+    jge .skip
+
     mov edx, [current_color]
     imul ecx, [g_pitch]
     shl eax, 2
@@ -873,6 +1015,7 @@ sys_draw_pixel:
     mov eax, [vram_back_buffer]
     add eax, ecx
     mov [eax], edx
+.skip:
     pop ebp
     ret
 
@@ -896,6 +1039,46 @@ sys_fill_rect:
     push edi
     push ebx
     push esi
+
+    ; Recortar el rectángulo contra la región de recorte activa y reescribir
+    ; los argumentos en la pila, para que el bucle siga usándolos tal cual.
+    mov eax, [ebp + 8]          ; x
+    mov ebx, [ebp + 12]         ; y
+    mov ecx, [ebp + 16]
+    add ecx, eax                ; x2
+    mov edx, [ebp + 20]
+    add edx, ebx                ; y2
+
+    mov esi, [clip_x]
+    cmp eax, esi
+    jge .clip_l
+    mov eax, esi
+.clip_l:
+    mov esi, [clip_y]
+    cmp ebx, esi
+    jge .clip_t
+    mov ebx, esi
+.clip_t:
+    mov esi, [clip_x2]
+    cmp ecx, esi
+    jle .clip_r
+    mov ecx, esi
+.clip_r:
+    mov esi, [clip_y2]
+    cmp edx, esi
+    jle .clip_b
+    mov edx, esi
+.clip_b:
+    sub ecx, eax                ; w recortado
+    jle .done
+    sub edx, ebx                ; h recortado
+    jle .done
+
+    mov [ebp + 8], eax
+    mov [ebp + 12], ebx
+    mov [ebp + 16], ecx
+    mov [ebp + 20], edx
+
     mov ebx, [ebp + 16]         ; w
     mov edx, [ebp + 20]         ; h
     mov esi, [current_color]

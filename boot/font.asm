@@ -26,6 +26,10 @@ global draw_char_vram
 
 extern g_pitch
 extern vram_back_buffer
+extern clip_x
+extern clip_y
+extern clip_x2
+extern clip_y2
 
 section .rodata
 align 4
@@ -248,45 +252,61 @@ draw_char_vram:
     pusha
 
     movzx eax, byte [ebp + 8]   ; Carácter ASCII
-    mov ebx, [ebp + 12]         ; X
-    mov ecx, [ebp + 16]         ; Y
     mov edx, [ebp + 20]         ; Color
 
     ; offset = g_font_8x16 + (c * 16)
     shl eax, 4
     add eax, g_font_8x16
 
-    ; PhysAddr = vram_back_buffer + (y * pitch) + (x * 4)
-    mov edi, [vram_back_buffer]
-    imul ecx, [g_pitch]
-    shl ebx, 2
-    add edi, ecx
-    add edi, ebx
-
-    mov ecx, 0                  ; Fila 0 a 15
+    xor ecx, ecx                ; Fila 0 a 15
 .row_loop:
     cmp ecx, 16
     jge .done
 
-    mov bl, [eax + ecx]         ; Byte con los 8 píxeles
-    mov esi, 0                  ; Bit 0 a 7
-
-.bit_loop:
-    cmp esi, 8
+    ; py = y + fila, descartada si cae fuera del recorte
+    mov ebx, [ebp + 16]
+    add ebx, ecx
+    cmp ebx, [clip_y]
+    jl .next_row
+    cmp ebx, [clip_y2]
     jge .next_row
 
-    test bl, 0x80
+    ; edi = base + py * pitch  (la columna se suma por píxel)
+    push eax
+    mov eax, ebx
+    imul eax, [g_pitch]
+    mov edi, [vram_back_buffer]
+    add edi, eax
+    pop eax
+
+    movzx esi, byte [eax + ecx] ; Byte con los 8 píxeles
+    push ecx
+    xor ecx, ecx                ; Bit 0 a 7
+
+.bit_loop:
+    cmp ecx, 8
+    jge .row_done
+
+    test esi, 0x80
     jz .skip_pixel
 
-    mov [edi + esi * 4], edx     ; Pintar píxel en VRAM
+    ; px = x + bit, descartado si cae fuera del recorte
+    mov ebx, [ebp + 12]
+    add ebx, ecx
+    cmp ebx, [clip_x]
+    jl .skip_pixel
+    cmp ebx, [clip_x2]
+    jge .skip_pixel
+    mov [edi + ebx * 4], edx
 
 .skip_pixel:
-    shl bl, 1
-    inc esi
+    shl esi, 1
+    inc ecx
     jmp .bit_loop
 
+.row_done:
+    pop ecx
 .next_row:
-    add edi, [g_pitch]
     inc ecx
     jmp .row_loop
 

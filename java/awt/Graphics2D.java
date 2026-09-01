@@ -119,6 +119,12 @@ public class Graphics2D {
         return Native.sys(Native.SYS_GET_PIXEL, x, y, 0, 0);
     }
 
+    // Limita todo el dibujo posterior al rectángulo dado. Sin esto el
+    // contenido de una ventana se sale de su marco al reducirla.
+    public void setClip(int x, int y, int w, int h) {
+        Native.sys(Native.SYS_SET_CLIP, x, y, w, h);
+    }
+
     public void present() {
         // Syscall 26: copiar el buffer trasero completo a la VRAM real (doble buffer, evita el parpadeo)
         Native.sys(Native.SYS_PRESENT, 0, 0, 0, 0);
