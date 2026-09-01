@@ -64,6 +64,13 @@ public class Native {
     public static final int SYS_SB16_STATUS      = 37; // 1 si se detecto la Sound Blaster
     public static final int SYS_SND_PLAY         = 38; // Reproduce un sonido del sistema
     public static final int SYS_STR_BYTE         = 30; // Byte i-esimo de un literal de cadena
+    public static final int SYS_FS_STATUS        = 39; // 0 sin disco, 1 montado, 2 formateado, 3 ajeno
+    public static final int SYS_FS_COUNT         = 40; // Entradas del directorio raiz
+    public static final int SYS_FS_NAME          = 41; // Byte b del nombre de la entrada a
+    public static final int SYS_FS_SIZE          = 42; // Tamano en bytes de la entrada a
+    public static final int SYS_FS_ISDIR         = 43; // 1 si la entrada a es un directorio
+    public static final int SYS_FS_FREE_KB       = 44; // Espacio libre en KB
+    public static final int SYS_FS_TOTAL_KB      = 45; // Espacio total del volumen en KB
 
 
     // FIRMAS NATIVAS

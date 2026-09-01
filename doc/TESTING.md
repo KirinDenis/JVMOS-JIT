@@ -72,6 +72,39 @@ node tests/wasm_game_diff.js tests/build/wasm_host_test.exe \
   wasm/guest/target/wasm32-unknown-unknown/release/sokoban_guest.wasm
 ```
 
+# FAT32: the driver against an image, and a second opinion
+
+There is no mtools and no 7-Zip on a typical Windows machine, so nothing here
+can open a FAT image except what we wrote. The answer is two implementations
+that do not share an understanding: the C driver, and a reader in
+`tests/fat32_verify.js` written from the specification, which checks the MBR,
+the BPB, both FATs against each other, FSInfo, the backup boot sector and every
+cluster chain.
+
+`tests/fat32_test.c` hands the driver a file instead of the ATA syscalls, which
+is the whole reason `fat_read_sector` and `fat_write_sector` are an interface
+rather than inline `in`/`out`.
+
+```
+cl /nologo /W4 /Fe:build\fat32_test.exe tests\fat32_test.c fs\fat32.c
+build\fat32_test.exe disk.img boot 10
+node tests\fat32_verify.js disk.img README.TXT 253
+```
+
+`boot` does what `fs_init` does on a blank disk, so first boot and second boot
+can be inspected from outside the OS instead of by squinting at a window.
+Running it twice must format once and mount the second time. `writebig` and
+`verifybig` push a file across many clusters and read every byte back, which is
+what exercises the FAT chain rather than a single-cluster file.
+
+What this has already caught:
+
+* free space reported as `0 KB free of 0 KB`. Kilobytes were computed as
+  `clusters * bytes_per_cluster / 1024`, and a 512 byte cluster divides to zero
+  before it is ever multiplied. Counted as sectors/2 now.
+* the welcome file's length, counted by hand as 258 when it is 253. It is
+  measured at runtime now instead of written down.
+
 # What still cannot be checked here
 The assembler and the picture. There is no nasm and no gcc on a typical Windows
 machine, so `boot/*.asm` and the kernel link are only proven by CI, and how it

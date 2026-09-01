@@ -170,7 +170,14 @@ public class Boot {
     static int radioSel;
     static int progress;
     static int modSel;                  // selected row in the Modules list
-    static int fileSel;                 // selected row in the File Manager
+    static int fileSel;                 // selected entry in the File Manager
+    static int fileTop;                 // first entry visible, for scrolling
+
+    // Returned by SYS_FS_STATUS.
+    static final int FS_ABSENT = 0;     // no disk answered
+    static final int FS_MOUNTED = 1;    // an existing volume was found
+    static final int FS_FORMATTED = 2;  // the disk was blank, so we made one
+    static final int FS_FOREIGN = 3;    // occupied by something not ours to erase
     static int fieldFocus, fieldLen;
     static int[] fieldBuf;
     static int pressedBtn;              // -1 none, else button id
@@ -262,6 +269,7 @@ public class Boot {
         progress = 45;
         modSel = 0;
         fileSel = 0;
+        fileTop = 0;
         fieldFocus = 0;
         fieldLen = 0;
 
@@ -502,7 +510,9 @@ public class Boot {
     // Down/Right: inside a list move the selection, otherwise move the focus.
     static void stepDown(int i) {
         if (i == W_FILES) {
-            if (fileSel < 5) fileSel = fileSel + 1;
+            // Bounded by what is actually on the disk, not by a fixed six.
+            int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
+            if (fileSel < count - 1) fileSel = fileSel + 1;
             return;
         }
         if (i == W_GALLERY && focus[i] == F_LIST) {
@@ -1394,29 +1404,76 @@ public class Boot {
         return 0;
     }
 
+    // This is the real root directory of the FAT32 volume, not a fixed list.
+    // Names arrive one byte at a time through SYS_FS_NAME because a syscall
+    // returns an int and nothing else, the same way string literals already
+    // cross in sys_str_byte.
     static void drawFiles(int x, int y, int w, int h) {
+        int status = Native.sys(Native.SYS_FS_STATUS, 0, 0, 0, 0);
+
         panel(x, y, w, 22, C_FACE, 1);
         g.setRGB(C_TEXT);
         g.drawString("/ (root)", x + 8, y + 3);
+        drawVolume(status, x, y + 3, w);
 
-        // Rows follow the window height, and each row spans the full width.
+        if (status == FS_ABSENT) {
+            g.setRGB(C_DARK);
+            g.drawString("No disk answered at boot.", x + 8, y + 38);
+            return;
+        }
+        if (status == FS_FOREIGN) {
+            // Refusing to format is the whole point: a disk carrying somebody
+            // else's partition is not ours to erase for the sake of a demo.
+            g.setRGB(C_DARK);
+            g.drawString("Unknown partition found.", x + 8, y + 38);
+            g.drawString("Left untouched, not formatted.", x + 8, y + 58);
+            return;
+        }
+
+        int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
+        if (count == 0) {
+            g.setRGB(C_DARK);
+            g.drawString("The volume is empty.", x + 8, y + 38);
+            return;
+        }
+
         int rows = (h - 30) / 24;
-        if (rows > 6) rows = 6;
-        if (rows > 0) fileRow("APPS", x, y + 30, w, 0, 1);
-        if (rows > 1) fileRow("DOCS", x, y + 54, w, 1, 1);
-        if (rows > 2) fileRow("SYSTEM", x, y + 78, w, 2, 1);
-        if (rows > 3) fileRow("README.TXT", x, y + 102, w, 3, 0);
-        if (rows > 4) fileRow("BOOT.LOG", x, y + 126, w, 4, 0);
-        if (rows > 5) fileRow("PAINT.CLASS", x, y + 150, w, 5, 0);
+        if (rows < 1) rows = 1;
 
-        if (isActive(W_FILES) && rows > 0) {
-            int sel = fileSel;
-            if (sel >= rows) sel = rows - 1;
-            focusRing(x, y + 28 + sel * 24, w, 24);
+        // Keep the selection inside the visible window, whatever the height.
+        if (fileSel >= count) fileSel = count - 1;
+        if (fileSel < 0) fileSel = 0;
+        if (fileTop > fileSel) fileTop = fileSel;
+        if (fileSel >= fileTop + rows) fileTop = fileSel - rows + 1;
+        if (fileTop < 0) fileTop = 0;
+
+        int r = 0;
+        while (r < rows && fileTop + r < count) {
+            fileRow(fileTop + r, x, y + 30 + r * 24, w);
+            r = r + 1;
+        }
+
+        if (isActive(W_FILES)) {
+            focusRing(x, y + 28 + (fileSel - fileTop) * 24, w, 24);
         }
     }
 
-    static void fileRow(String name, int x, int y, int w, int idx, int isDir) {
+    // Free space, from walking the FAT rather than from the cached FSInfo
+    // count, which any driver is allowed to leave stale.
+    static void drawVolume(int status, int x, int y, int w) {
+        if (status != FS_MOUNTED && status != FS_FORMATTED) return;
+        if (w < 300) return;                    // no room without colliding
+        int free = Native.sys(Native.SYS_FS_FREE_KB, 0, 0, 0, 0);
+        int total = Native.sys(Native.SYS_FS_TOTAL_KB, 0, 0, 0, 0);
+        g.setRGB(C_DARK);
+        int nx = g.drawInt(free, x + 100, y);
+        g.drawString(" of ", nx, y);
+        nx = g.drawInt(total, nx + 32, y);      // 4 characters at 8px
+        g.drawString(" KB free", nx, y);
+    }
+
+    static void fileRow(int idx, int x, int y, int w) {
+        int isDir = Native.sys(Native.SYS_FS_ISDIR, idx, 0, 0, 0);
         if (fileSel == idx) {
             g.setRGB(C_SEL);
             g.fillRect(x, y, w, 20);
@@ -1434,7 +1491,35 @@ public class Boot {
             g.fillRect(x + 8, y + 12, 7, 1);
         }
         if (fileSel == idx) g.setRGB(C_TEXTLT); else g.setRGB(C_TEXT);
-        g.drawString(name, x + 26, y + 2);
+        drawEntryName(idx, x + 26, y + 2);
+
+        if (isDir != 1 && w > 260) {
+            if (fileSel == idx) g.setRGB(C_TEXTLT); else g.setRGB(C_DARK);
+            g.drawInt(Native.sys(Native.SYS_FS_SIZE, idx, 0, 0, 0), x + w - 96, y + 2);
+        }
+    }
+
+    // A directory entry stores "README  TXT": eight characters of name, three
+    // of extension, space padded, and no dot anywhere. The dot is put back
+    // here, which is why this cannot just be a string copy.
+    static void drawEntryName(int idx, int x, int y) {
+        int i = 0;
+        int nx = x;
+        while (i < 8) {
+            int c = Native.sys(Native.SYS_FS_NAME, idx, i, 0, 0);
+            if (c == 32) break;
+            nx = g.drawChar((char) c, nx, y);
+            i = i + 1;
+        }
+        if (Native.sys(Native.SYS_FS_NAME, idx, 8, 0, 0) == 32) return;
+        nx = g.drawChar('.', nx, y);
+        i = 8;
+        while (i < 11) {
+            int c = Native.sys(Native.SYS_FS_NAME, idx, i, 0, 0);
+            if (c == 32) break;
+            nx = g.drawChar((char) c, nx, y);
+            i = i + 1;
+        }
     }
 
     static void drawSystem(int x, int y, int w, int h) {
@@ -1585,11 +1670,16 @@ public class Boot {
     }
 
     static void filesClick(int x, int y, int w) {
+        // A click selects the entry drawn on that row, which after scrolling
+        // is fileTop + row rather than the row number itself.
+        int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
         int row = 0;
-        while (row < 6) {
+        while (row < 16) {
             if (hit(mouseX, mouseY, x, y + 30 + row * 24, w, 20)) {
-                fileSel = row;
-                if (chkSound == 1) clickTone();
+                if (fileTop + row < count) {
+                    fileSel = fileTop + row;
+                    if (chkSound == 1) clickTone();
+                }
             }
             row = row + 1;
         }

@@ -92,6 +92,7 @@ extern g_pitch
 extern g_width
 extern g_height
 extern draw_char_vram
+extern fs_init
 
 ; DOBLE BUFFER: todo el dibujo va aquí, sys_present() lo copia a la VRAM real
 ; de una sola vez, evitando el parpadeo de escribir directo sobre pantalla.
@@ -184,6 +185,12 @@ sys_hardware_init:
     call sys_init_mouse
 
     sti
+
+    ; El disco se monta con las interrupciones ya abiertas: dar formato
+    ; escribe unos cientos de sectores y no hay motivo para hacerlo a ciegas.
+    ; Si no hay disco, fs_init lo dice por el puerto serie y sigue.
+    call fs_init
+
     ret
 
 sys_cli:
@@ -1686,6 +1693,112 @@ sys_net_receive_packet:
 
 
 ; DISCO ATA IDE LBA28
+;
+; Ambas rutinas devuelven 1 si el sector se movio y 0 si no, y toda espera
+; esta acotada. Un bucle `in al, dx` / `test` sin limite es la forma clasica
+; de congelar el arranque en una maquina sin disco: el puerto de estado
+; flota a 0xFF y el bucle no termina nunca. El navegador puede arrancar sin
+; disk.img, asi que esto tiene que ser sobrevivible, no solo improbable.
+
+ATA_DATA        equ 0x1F0
+ATA_COUNT       equ 0x1F2
+ATA_LBA0        equ 0x1F3
+ATA_LBA1        equ 0x1F4
+ATA_LBA2        equ 0x1F5
+ATA_DRIVE       equ 0x1F6
+ATA_CMD         equ 0x1F7       ; al escribir: comando
+ATA_STATUS      equ 0x1F7       ; al leer: estado
+ATA_TIMEOUT     equ 500000
+
+; El estado se lee en 0x1F7 y no en el estado alternativo 0x3F6, que seria lo
+; correcto por no reconocer la interrupcion: 0x1F7 es el puerto que este
+; codigo ya usaba y que el emulador demuestra implementar. Si 0x3F6 no
+; estuviera implementado devolveria 0xFF, lo tomariamos por "no hay disco" y
+; el volumen no se montaria nunca. Aqui no hay IRQ14 que reconocer.
+
+; Espera a que BSY se apague. eax = 1 listo, 0 si expiro o no hay disco.
+ata_wait_bsy:
+    push ecx
+    push edx
+    mov ecx, ATA_TIMEOUT
+    mov dx, ATA_STATUS
+.loop:
+    in al, dx
+    cmp al, 0xFF                ; nadie maneja el bus: no hay unidad
+    je .fail
+    test al, 0x80
+    jz .ok
+    dec ecx
+    jnz .loop
+.fail:
+    xor eax, eax
+    jmp .done
+.ok:
+    mov eax, 1
+.done:
+    pop edx
+    pop ecx
+    ret
+
+; Espera DRQ tras un comando. eax = 1 cuando se pueden mover los datos,
+; 0 si la unidad reporto error o nunca contesto.
+ata_wait_drq:
+    push ecx
+    push edx
+    mov ecx, ATA_TIMEOUT
+    mov dx, ATA_STATUS
+.loop:
+    in al, dx
+    cmp al, 0xFF
+    je .fail
+    ; BSY primero: mientras esta puesto, los demas bits no significan nada,
+    ; y mirar ERR antes daria fallos inventados.
+    test al, 0x80
+    jnz .next
+    test al, 0x01               ; ERR
+    jnz .fail
+    test al, 0x20               ; DF, fallo de dispositivo
+    jnz .fail
+    test al, 0x08               ; DRQ
+    jnz .ok
+.next:
+    dec ecx
+    jnz .loop
+.fail:
+    xor eax, eax
+    jmp .done
+.ok:
+    mov eax, 1
+.done:
+    pop edx
+    pop ecx
+    ret
+
+; Carga LBA y cuenta en los registros de la unidad. eax = LBA.
+ata_select:
+    push eax
+    mov dx, ATA_DRIVE
+    shr eax, 24
+    and al, 0x0F                ; solo los 4 bits altos de un LBA28
+    or al, 0xE0                 ; LBA, maestro
+    out dx, al
+
+    mov dx, ATA_COUNT
+    mov al, 1
+    out dx, al
+
+    pop eax
+    push eax
+    mov dx, ATA_LBA0
+    out dx, al
+    shr eax, 8
+    mov dx, ATA_LBA1
+    out dx, al
+    shr eax, 8
+    mov dx, ATA_LBA2
+    out dx, al
+    pop eax
+    ret
 
 sys_disk_read_sector:
     push ebp
@@ -1693,45 +1806,24 @@ sys_disk_read_sector:
     push ebx
     push edi
 
-    mov dx, 0x1F7
-.wait_bsy:
-    in al, dx
-    test al, 0x80
-    jnz .wait_bsy
+    call ata_wait_bsy
+    test eax, eax
+    jz .fail
 
     mov eax, [ebp + 8]          ; LBA
     mov edi, [ebp + 12]         ; buffer
+    call ata_select
 
-    mov dx, 0x1F6
-    shr eax, 24
-    or al, 0xE0
-    out dx, al
-
-    mov dx, 0x1F2
-    mov al, 1
+    mov dx, ATA_CMD
+    mov al, 0x20                ; READ SECTORS
     out dx, al
 
-    mov eax, [ebp + 8]
-    mov dx, 0x1F3
-    out dx, al
-    shr eax, 8
-    mov dx, 0x1F4
-    out dx, al
-    shr eax, 8
-    mov dx, 0x1F5
-    out dx, al
-
-    mov dx, 0x1F7
-    mov al, 0x20
-    out dx, al
-
-.wait_drq:
-    in al, dx
-    test al, 0x08
-    jz .wait_drq
+    call ata_wait_drq
+    test eax, eax
+    jz .fail
 
     mov ecx, 256
-    mov dx, 0x1F0
+    mov dx, ATA_DATA
 .read:
     in ax, dx
     mov [edi], ax
@@ -1739,6 +1831,10 @@ sys_disk_read_sector:
     loop .read
 
     mov eax, 1
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
     pop edi
     pop ebx
     pop ebp
@@ -1750,52 +1846,45 @@ sys_disk_write_sector:
     push ebx
     push esi
 
-    mov dx, 0x1F7
-.wait_bsy_w:
-    in al, dx
-    test al, 0x80
-    jnz .wait_bsy_w
+    call ata_wait_bsy
+    test eax, eax
+    jz .fail
 
     mov eax, [ebp + 8]
     mov esi, [ebp + 12]
+    call ata_select
 
-    mov dx, 0x1F6
-    shr eax, 24
-    or al, 0xE0
-    out dx, al
-
-    mov dx, 0x1F2
-    mov al, 1
+    mov dx, ATA_CMD
+    mov al, 0x30                ; WRITE SECTORS
     out dx, al
 
-    mov eax, [ebp + 8]
-    mov dx, 0x1F3
-    out dx, al
-    shr eax, 8
-    mov dx, 0x1F4
-    out dx, al
-    shr eax, 8
-    mov dx, 0x1F5
-    out dx, al
-
-    mov dx, 0x1F7
-    mov al, 0x30
-    out dx, al
-
-.wait_drq_w:
-    in al, dx
-    test al, 0x08
-    jz .wait_drq_w
+    call ata_wait_drq
+    test eax, eax
+    jz .fail
 
     mov ecx, 256
-    mov dx, 0x1F0
+    mov dx, ATA_DATA
 .write:
     mov ax, [esi]
     out dx, ax
     add esi, 2
     loop .write
 
+    ; Sin FLUSH CACHE la escritura puede quedarse en la unidad; un emulador
+    ; la aplica igual, un disco real no tiene por que hacerlo. No se comprueba
+    ; el resultado a proposito: los datos ya se transfirieron, y dar por
+    ; fallida la escritura porque una unidad no implemente 0xE7 seria peor
+    ; que no vaciar la cache.
+    mov dx, ATA_CMD
+    mov al, 0xE7
+    out dx, al
+    call ata_wait_bsy
+
     mov eax, 1
+    jmp .done
+.fail:
+    xor eax, eax
+.done:
     pop esi
     pop ebx
     pop ebp

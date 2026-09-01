@@ -56,6 +56,17 @@ method up by name.
 | 36 | `SYS_WASM_MUSIC` | a = 1 audible, 0 silent | advances the sequencer one step |
 | 37 | `SYS_SB16_STATUS` | | 1 if a Sound Blaster answered the reset |
 | 38 | `SYS_SND_PLAY` | a = clip id, 0 boot to 6 fanfare | |
+| 39 | `SYS_FS_STATUS` | | 0 no disk, 1 mounted, 2 formatted, 3 foreign |
+| 40 | `SYS_FS_COUNT` | | entries in the root directory |
+| 41 | `SYS_FS_NAME` | a = entry, b = 0..10 | one byte of the 8.3 name |
+| 42 | `SYS_FS_SIZE` | a = entry | size in bytes |
+| 43 | `SYS_FS_ISDIR` | a = entry | 1 for a directory |
+| 44 | `SYS_FS_FREE_KB` | | free space, from walking the FAT |
+| 45 | `SYS_FS_TOTAL_KB` | | size of the volume |
+
+Names come back one byte at a time because a syscall returns an `int` and
+nothing else. Allocating a Java string inside the kernel is a far larger thing
+to get right than a loop, and string literals already cross the same way.
 
 The network calls target an RTL8139. That card is not emulated by v86, which
 provides an NE2000, so those three are dead code in a browser.

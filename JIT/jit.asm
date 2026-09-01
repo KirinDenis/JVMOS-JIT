@@ -62,6 +62,8 @@ section .text
 	extern c_selftest
 	extern wasm_guest_frame, wasm_push_key, wasm_set_sound, wasm_music_tick
 	extern sb16_present, audio_play
+	extern fs_status, fs_count, fs_name_byte, fs_entry_size, fs_entry_is_dir
+	extern fs_free_kb, fs_total_kb
 
 jit_init:
     push eax
@@ -361,6 +363,20 @@ sys_native_dispatch:
     je .sys_sb16_status
     cmp eax, 38
     je .sys_snd_play
+    cmp eax, 39
+    je .sys_fs_status
+    cmp eax, 40
+    je .sys_fs_count
+    cmp eax, 41
+    je .sys_fs_name
+    cmp eax, 42
+    je .sys_fs_size
+    cmp eax, 43
+    je .sys_fs_isdir
+    cmp eax, 44
+    je .sys_fs_free
+    cmp eax, 45
+    je .sys_fs_total
 
     xor eax, eax
     jmp .done
@@ -604,6 +620,45 @@ sys_native_dispatch:
     call audio_play
     add esp, 4
     xor eax, eax
+    jmp .done
+
+; --- Sistema de archivos FAT32 -----------------------------------------
+; Los nombres cruzan byte a byte porque una syscall solo devuelve un int,
+; igual que ya hace sys_str_byte con los literales.
+
+.sys_fs_status:
+    call fs_status
+    jmp .done
+
+.sys_fs_count:
+    call fs_count
+    jmp .done
+
+.sys_fs_name:
+    push dword [sys_arg_b]      ; posicion dentro del nombre
+    push dword [sys_arg_a]      ; indice de la entrada
+    call fs_name_byte
+    add esp, 8
+    jmp .done
+
+.sys_fs_size:
+    push dword [sys_arg_a]
+    call fs_entry_size
+    add esp, 4
+    jmp .done
+
+.sys_fs_isdir:
+    push dword [sys_arg_a]
+    call fs_entry_is_dir
+    add esp, 4
+    jmp .done
+
+.sys_fs_free:
+    call fs_free_kb
+    jmp .done
+
+.sys_fs_total:
+    call fs_total_kb
     jmp .done
 
 .sys_c_selftest:

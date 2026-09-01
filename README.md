@@ -19,6 +19,8 @@ It boots in a browser, with no install: https://kirindenis.github.io/JVMOS-JIT/
   Rust, compiled to WebAssembly and executed inside the sandbox
 * A WebAssembly interpreter covering the i32 core of the MVP instruction set,
   with every linear memory access bounds checked
+* A FAT32 volume the system mounts at boot, and formats itself if the disk is
+  blank, keeping the first megabyte outside the partition for a system image
 
 # Requirements
 * C-Compiler: gcc-12
@@ -53,6 +55,9 @@ to pick up a new build.
   why breaking those rules fails silently instead of failing loudly
 * [doc/WASM-SANDBOX.md](doc/WASM-SANDBOX.md) - the interpreter, the host ABI and
   how to build a guest program
+* [doc/FILESYSTEM.md](doc/FILESYSTEM.md) - the FAT32 volume, the system area
+  reserved outside the partition, and when the system will and will not format
+  a disk
 * [doc/SYSCALLS.md](doc/SYSCALLS.md) - the syscall table
 * [doc/TESTING.md](doc/TESTING.md) - how to check changes without building the
   image
@@ -61,7 +66,7 @@ to pick up a new build.
 * Load programs from disk or over the wire instead of embedding them
 * Sound: v86 emulates a Sound Blaster 16, the kernel only drives the PC speaker
 * Network support
-* Improve actual filesystem
+* Subdirectories and long file names; the volume is 8.3 and root-only today
 * (FAT/FAT32, NTFS, etc.) support
 * Test useful apps (Notepad, Paint, Calculator)
 
