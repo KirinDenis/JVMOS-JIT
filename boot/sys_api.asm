@@ -1025,14 +1025,41 @@ sys_set_clip:
     push ebp
     mov ebp, esp
     push eax
-    mov eax, [ebp + 8]
+    push ebx
+
+    mov eax, [ebp + 8]          ; x
+    cmp eax, 0
+    jge .x_ok
+    xor eax, eax
+.x_ok:
     mov [clip_x], eax
-    add eax, [ebp + 16]
-    mov [clip_x2], eax
-    mov eax, [ebp + 12]
+
+    mov ebx, [ebp + 8]          ; x2 = x + w, sin recortar antes de sumar
+    add ebx, [ebp + 16]
+    mov eax, [g_width]
+    cmp ebx, eax
+    jle .x2_ok
+    mov ebx, eax
+.x2_ok:
+    mov [clip_x2], ebx
+
+    mov eax, [ebp + 12]         ; y
+    cmp eax, 0
+    jge .y_ok
+    xor eax, eax
+.y_ok:
     mov [clip_y], eax
-    add eax, [ebp + 20]
-    mov [clip_y2], eax
+
+    mov ebx, [ebp + 12]         ; y2 = y + h
+    add ebx, [ebp + 20]
+    mov eax, [g_height]
+    cmp ebx, eax
+    jle .y2_ok
+    mov ebx, eax
+.y2_ok:
+    mov [clip_y2], ebx
+
+    pop ebx
     pop eax
     pop ebp
     ret

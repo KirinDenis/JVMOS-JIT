@@ -62,7 +62,7 @@ public class Boot {
     static final int DESK_TOP = MENU_H;
     static final int DESK_BOT = TASK_Y;
 
-    static final int TITLE_H = 26;
+    static final int TITLE_H = 27;
     static final int BORDER = 3;
     static final int GRIP = 14;
     static final int SHADOW = 12;
@@ -631,8 +631,8 @@ public class Boot {
             wy[i] = mouseY - dragDY;
             if (wy[i] < DESK_TOP) wy[i] = DESK_TOP;
             if (wy[i] > DESK_BOT - TITLE_H) wy[i] = DESK_BOT - TITLE_H;
-            if (wx[i] < 0 - ww[i] + 80) wx[i] = 0 - ww[i] + 80;
-            if (wx[i] > SCR_W - 80) wx[i] = SCR_W - 80;
+            if (wx[i] < 0) wx[i] = 0;
+            if (wx[i] + ww[i] > SCR_W) wx[i] = SCR_W - ww[i];
         } else {
             ww[i] = mouseX + dragDX - wx[i];
             wh[i] = mouseY + dragDY - wy[i];
@@ -911,7 +911,7 @@ public class Boot {
 
         // Caption centred in the bar instead of pinned to its top edge.
         g.setRGB(ti);
-        g.drawString(winTitle(i), x + 12, barY + (barH - CH_H) / 2);
+        g.drawString(winTitle(i), x + 12, barY + (barH - CH_H) / 2 + 2);
 
         int btnY = barY + (barH - TBTN) / 2;
         drawTitleBtn(x + w - 70, btnY, 0, active);
@@ -947,7 +947,7 @@ public class Boot {
         int j = 0;
         while (j < 3) {
             int s = SHADOW - j * 4;
-            g.fillBlend(x + w, y + SHADOW, s, h);
+            g.fillBlend(x + w, y + SHADOW, s, h - SHADOW + s);
             g.fillBlend(x + SHADOW, y + h, w - SHADOW, s);
             j = j + 1;
         }
@@ -1123,34 +1123,34 @@ public class Boot {
     // to be) ending in a point on the left, and a tail that leaves the head on
     // the right and slants down-right instead of hanging straight down.
     static void drawPointer(int x, int y) {
-        // soft shadow so the pointer stays readable over any background
         g.setRGB(0x00000000);
-        g.fillBlend(x + 2, y + 3, 7, 13);
-
-        g.setRGB(C_TEXT);
         int i = 0;
-        while (i < 12) {                        // head outline
+        while (i < 13) {                        // head outline, 1:2 slope
             g.fillRect(x, y + i, i / 2 + 2, 1);
             i = i + 1;
         }
-        g.fillRect(x, y + 12, 3, 1);            // lower point of the head
-        g.fillRect(x, y + 13, 2, 1);
+        // The head keeps widening for two more rows so the tail leaves it
+        // while still touching: that gap was what made the arrow look broken.
+        g.fillRect(x, y + 13, 6, 1);
+        g.fillRect(x, y + 14, 4, 1);
 
         int k = 0;
-        while (k < 6) {                         // tail, angled down-right
-            g.fillRect(x + 4 + k / 2, y + 12 + k, 3, 1);
+        while (k < 5) {                         // tail, angled down-right
+            g.fillRect(x + 4 + k, y + 14 + k, 3, 1);
             k = k + 1;
         }
 
         g.setRGB(C_TEXTLT);
         i = 2;
-        while (i < 12) {                        // white interior of the head
+        while (i < 13) {                        // white interior of the head
             g.fillRect(x + 1, y + i, i / 2, 1);
             i = i + 1;
         }
+        g.fillRect(x + 1, y + 13, 3, 1);
+        g.fillRect(x + 1, y + 14, 2, 1);
         k = 0;
-        while (k < 5) {                         // white core of the tail
-            g.fillRect(x + 5 + k / 2, y + 12 + k, 1, 1);
+        while (k < 4) {                         // white core of the tail
+            g.fillRect(x + 5 + k, y + 15 + k, 1, 1);
             k = k + 1;
         }
     }
@@ -1318,12 +1318,12 @@ public class Boot {
     static void drawGallery(int x, int y, int w, int h) {
         boolean act = isActive(W_GALLERY);
 
-        groupBox(x, y + 8, 210, 96, "Options");
+        groupBox(x, y, 210, 96, "Options");
         checkbox(x + 12, y + 26, "Sound enabled", chkSound);
         checkbox(x + 12, y + 50, "Desktop grid", chkGrid);
         checkbox(x + 12, y + 74, "Show status", chkStatus);
 
-        groupBox(x + 224, y + 8, 210, 96, "Refresh rate");
+        groupBox(x + 224, y, 210, 96, "Refresh rate");
         radio(x + 236, y + 26, "Low", boolInt(radioSel == 0));
         radio(x + 236, y + 50, "Normal", boolInt(radioSel == 1));
         radio(x + 236, y + 74, "High", boolInt(radioSel == 2));
@@ -1344,7 +1344,7 @@ public class Boot {
         if (rows > 5) rows = 5;
         if (rows > 0) {
             int boxH = rows * 20 + 18;
-            groupBox(x + 12, y + 236, 270, boxH, "Modules");
+            groupBox(x + 12, y + 228, 270, boxH, "Modules");
             if (rows > 0) listRow("kernel.Boot", x + 16, y + 254, 262, 0);
             if (rows > 1) listRow("java.awt.Graphics2D", x + 16, y + 274, 262, 1);
             if (rows > 2) listRow("java.io.PrintStream", x + 16, y + 294, 262, 2);
