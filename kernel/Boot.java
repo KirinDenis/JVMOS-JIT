@@ -1408,39 +1408,71 @@ public class Boot {
     }
 
     // ---- mouse pointer ---------------------------------------------------
-    // Classic arrow: a narrow head (1:2 slope, not the 45-degree wedge it used
-    // to be) ending in a point on the left, and a tail that leaves the head on
-    // the right and slants down-right instead of hanging straight down.
+    // The shape, exactly as it lands on screen: # is the black outline, . the
+    // white interior, and the tip is the hotspot at (0,0).
+    //
+    //     0123456789AB
+    //  0  ##
+    //  1  ##
+    //  2  #.#
+    //  3  #.#
+    //  4  #..#
+    //  5  #..#
+    //  6  #...#
+    //  7  #...#
+    //  8  #....#
+    //  9  #....#
+    // 10  #.....#
+    // 11  #.....#
+    // 12  #......#
+    // 13  #......#          widest point of the head
+    // 14  #....#..#         the tail leaves the head here, still touching
+    // 15  #...# #..#
+    // 16  #..#   #..#
+    // 17  #.#     ####      the tail's cap
+    // 18  ##                the wing's tip, back on the spine
+    //
+    // The previous version computed the lower half and left eleven pixels of
+    // interior touching the background: the head's right edge stopped dead at
+    // its widest row with nothing below it, and the tail had an outline only
+    // on its right, so its white core was open along the whole left side. That
+    // is the missing right side. Every white pixel here has shape on all four
+    // sides, which is what makes the arrow read as one closed object.
     static void drawPointer(int x, int y) {
+        int i;
+
         g.setRGB(0x00000000);
-        int i = 0;
-        while (i < 13) {                        // head outline, 1:2 slope
+        i = 0;
+        while (i < 14) {                        // head, a 1:2 slope
             g.fillRect(x, y + i, i / 2 + 2, 1);
             i = i + 1;
         }
-        // The head keeps widening for two more rows so the tail leaves it
-        // while still touching: that gap was what made the arrow look broken.
-        g.fillRect(x, y + 13, 6, 1);
-        g.fillRect(x, y + 14, 4, 1);
-
-        int k = 0;
-        while (k < 5) {                         // tail, angled down-right
-            g.fillRect(x + 4 + k, y + 14 + k, 3, 1);
-            k = k + 1;
+        i = 0;
+        while (i < 5) {                         // wing, closing the head back
+            g.fillRect(x, y + 14 + i, 6 - i, 1);        // onto the spine
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 4) {                         // tail, angled down-right
+            g.fillRect(x + 5 + i, y + 14 + i, 4, 1);
+            i = i + 1;
         }
 
         g.setRGB(C_TEXTLT);
         i = 2;
-        while (i < 13) {                        // white interior of the head
+        while (i < 14) {                        // interior of the head
             g.fillRect(x + 1, y + i, i / 2, 1);
             i = i + 1;
         }
-        g.fillRect(x + 1, y + 13, 3, 1);
-        g.fillRect(x + 1, y + 14, 2, 1);
-        k = 0;
-        while (k < 4) {                         // white core of the tail
-            g.fillRect(x + 5 + k, y + 15 + k, 1, 1);
-            k = k + 1;
+        i = 0;
+        while (i < 4) {                         // interior of the wing
+            g.fillRect(x + 1, y + 14 + i, 4 - i, 1);
+            i = i + 1;
+        }
+        i = 0;
+        while (i < 3) {                         // core of the tail, two pixels
+            g.fillRect(x + 6 + i, y + 14 + i, 2, 1);    // wide so it reads as a
+            i = i + 1;                                  // tail and not a line
         }
     }
 

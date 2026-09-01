@@ -124,6 +124,25 @@ confirms that creating, overwriting and deleting left a volume that something
 other than our own driver still considers valid, and that the deleted file's
 clusters really went back to the FAT.
 
+# The mouse pointer, by rendering it
+
+`tests/pointer_shape.js` lifts `drawPointer` out of `kernel/Boot.java`, runs it
+against a mock that draws into a character grid, prints the arrow and checks
+that no interior pixel touches the background.
+
+```
+node tests/pointer_shape.js
+node tests/pointer_shape.js some/other/Boot.java
+```
+
+The body is taken from the real source rather than copied, so the check cannot
+drift away from what ships. It was written after the arrow was reported as
+missing its right side twice: reading the code did not show it, and printing it
+showed it at once. The version that shipped had eleven interior pixels open to
+the background, the head's right edge stopping dead at its widest row and the
+tail outlined only on its right. The second argument is how that was confirmed
+-- the test fails on the old file and passes on the new one.
+
 # What still cannot be checked here
 The assembler and the picture. There is no nasm and no gcc on a typical Windows
 machine, so `boot/*.asm` and the kernel link are only proven by CI, and how it
