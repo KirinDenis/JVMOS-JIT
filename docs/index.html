@@ -218,16 +218,38 @@
     startBtn.disabled = true;
   }
 
-  function boot() {
+  // The disk images are ~12 MB and GitHub Pages serves them with a long cache
+  // lifetime, so after a rebuild the browser happily keeps booting the previous
+  // image — and the emulator's Reset button only restarts the copy already in
+  // memory, which hides it further. Ask the server for the current validator
+  // first (a headers-only request) and put it in the URL: unchanged build =
+  // same URL = cache hit, new build = new URL = guaranteed fresh download.
+  async function versionedUrl(path) {
+    try {
+      const r = await fetch(path, { method: "HEAD", cache: "no-store" });
+      const tag = r.headers.get("etag") || r.headers.get("last-modified") || "";
+      const v = tag.replace(/[^a-zA-Z0-9]/g, "").slice(-16);
+      return { url: v ? path + "?v=" + v : path, stamp: r.headers.get("last-modified") };
+    } catch (e) {
+      return { url: path, stamp: null };
+    }
+  }
+
+  async function boot() {
     startBtn.disabled = true;
-    setStatus("Loading os.iso and disk.img…");
+    setStatus("Checking for a newer build…");
 
     screenContainer.addEventListener("mousedown", function () {
       screenContainer.focus();
     });
 
+    const iso = await versionedUrl("os.iso");
+    const img = await versionedUrl("disk.img");
+    if (iso.stamp) setStatus("Loading build of " + iso.stamp + " …");
+    else setStatus("Loading os.iso and disk.img…");
+
     try {
-      emulator = new V86(buildConfig());
+      emulator = new V86(buildConfig(iso.url, img.url));
     } catch (e) {
       setStatus("Failed to start the emulator: " + e.message, true);
       startBtn.disabled = false;
@@ -238,7 +260,7 @@
     attachListeners();
   }
 
-  function buildConfig() {
+  function buildConfig(isoUrl, imgUrl) {
     return {
       wasm_path: "https://cdn.jsdelivr.net/npm/v86/build/v86.wasm",
       memory_size: 128 * 1024 * 1024,
@@ -246,8 +268,8 @@
       screen_container: screenContainer,
       bios: { url: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/seabios.bin" },
       vga_bios: { url: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/vgabios.bin" },
-      cdrom: { url: "os.iso" },
-      hda: { url: "disk.img" },
+      cdrom: { url: isoUrl },
+      hda: { url: imgUrl },
       autostart: true,
     };
   }
@@ -313,7 +335,9 @@
 
   resetBtn.addEventListener("click", function () {
     if (!emulator) return;
-    setStatus("Resetting…");
+    // Reboots the machine from the image already in memory. Picking up a newer
+    // build means reloading the page, not resetting the VM.
+    setStatus("Rebooting the VM (same image — reload the page to pick up a new build)…");
     emulator.restart();
   });
 
