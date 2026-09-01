@@ -76,8 +76,8 @@ public class Boot {
     // is a blue-grey #707D8A that still reads against the surface (the old
     // #868686 on grey was the reason the help line went unnoticed).
     // One deep teal carries every interactive accent.
-    static final int C_DESK = 0x001B2430;      // desktop, top of the gradient
-    static final int C_DESK2 = 0x000E1620;     // desktop, bottom
+    static final int C_DESK = 0x000E3038;      // desktop base, a darker accent
+    static final int C_DESK2 = 0x0014606B;     // desktop stripes, the title bar colour
     static final int C_FACE = 0x00EFF0F1;      // window surface
     static final int C_SURF2 = 0x00E3E6E9;     // buttons, recessed strips
     static final int C_LIGHT = 0x00FFFFFF;
@@ -873,24 +873,17 @@ public class Boot {
         g.present();
     }
 
-    // Vertical gradient in 6px bands: 120 fills, about the same cost as the
-    // old scanline texture, but it reads as depth rather than as a pattern.
+    // Horizontal stripes in the title bar colour. The "Desktop grid" checkbox
+    // still switches the pattern off for a flat surface.
     static void drawDesktop() {
-        if (chkGrid == 0) {
-            g.setRGB(C_DESK);
-            g.fillRect(0, DESK_TOP, SCR_W, DESK_BOT - DESK_TOP);
-            return;
-        }
-        int span = DESK_BOT - DESK_TOP;
+        g.setRGB(C_DESK);
+        g.fillRect(0, DESK_TOP, SCR_W, DESK_BOT - DESK_TOP);
+        if (chkGrid == 0) return;
+        g.setRGB(C_DESK2);
         int y = DESK_TOP;
         while (y < DESK_BOT) {
-            int t = (y - DESK_TOP) * 255 / span;
-            int r = 0x1B + (0x0E - 0x1B) * t / 255;
-            int gr = 0x24 + (0x16 - 0x24) * t / 255;
-            int b = 0x30 + (0x20 - 0x30) * t / 255;
-            g.setRGB((r * 65536) + (gr * 256) + b);
-            g.fillRect(0, y, SCR_W, 6);
-            y = y + 6;
+            g.fillRect(0, y, SCR_W, 1);
+            y = y + 4;
         }
     }
 
@@ -1080,12 +1073,12 @@ public class Boot {
         g.drawString(s, x + 10, y + 2);
     }
 
-    // Dark bar, flat items, a 2px accent rule over the active one instead of
+    // Light bar, flat items, a 2px accent rule over the active one instead of
     // a pushed-in bevel.
     static void drawTaskbar() {
-        g.setRGB(C_DESK2);
+        g.setRGB(C_FACE);
         g.fillRect(0, TASK_Y, SCR_W, TASK_H);
-        g.setRGB(C_TITLE_A);
+        g.setRGB(C_SHADOW);
         g.fillRect(0, TASK_Y, SCR_W, 1);
 
         int bx = 8;
@@ -1094,13 +1087,13 @@ public class Boot {
             if (wOpen[i] == 1) {
                 boolean front = wMin[i] == 0 && zorder[WIN_COUNT - 1] == i;
                 if (front) {
-                    g.setRGB(0x00263445);
+                    g.setRGB(C_SURF2);
                     g.fillRect(bx, TASK_Y + 1, 128, TASK_H - 1);
                     g.setRGB(C_SEL);
                     g.fillRect(bx, TASK_Y + 1, 128, 2);
-                    g.setRGB(C_TEXTLT);
+                    g.setRGB(C_TEXT);
                 } else {
-                    g.setRGB(C_MUTED);
+                    g.setRGB(C_DARK);
                 }
                 g.drawString(winTitle(i), bx + 8, TASK_Y + (TASK_H - CH_H) / 2);
                 bx = bx + 134;
@@ -1111,7 +1104,7 @@ public class Boot {
     }
 
     static void drawClock(int x, int y) {
-        g.setRGB(C_TEXTLT);
+        g.setRGB(C_TEXT);
         int h = Calendar.get(Calendar.HOUR);
         int m = Calendar.get(Calendar.MINUTE);
         int s = Calendar.get(Calendar.SECOND);
