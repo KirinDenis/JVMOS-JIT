@@ -134,6 +134,15 @@ public class Boot {
     static final int K_RIGHT = 0x14D;
     static final int K_DOWN = 0x150;
 
+    // system sounds, ids shared with wasm/sb16.c
+    static final int SND_BOOT = 0;
+    static final int SND_CLICK = 1;
+    static final int SND_DENY = 2;
+    static final int SND_STEP = 3;
+    static final int SND_PUSH = 4;
+    static final int SND_BUMP = 5;
+    static final int SND_WIN = 6;
+
     // focusable control ids inside the gallery
     static final int F_CHK1 = 0;
     static final int F_RADIO1 = 3;
@@ -303,31 +312,21 @@ public class Boot {
         g.drawString(s, 40 + 8 * CH_W, y);
     }
 
-    // One note. Frequencies are passed straight to the PC speaker syscall:
-    // Toolkit.beep is overloaded and this JIT resolves methods by name only,
-    // so every Toolkit.beep(n) call would land on the no-arg 1000 Hz version.
-    static void note(int hz, int ms) {
-        Native.sys(Native.SYS_BEEP, hz, 0, 0, 0);
-        Native.sys(Native.SYS_SLEEP, ms, 0, 0, 0);
-        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
-        Native.sys(Native.SYS_SLEEP, 26, 0, 0, 0);
+    // Every sound the desktop makes goes through the mixer in wasm/sb16.c,
+    // which plays a mixed PCM clip on a Sound Blaster and falls back to the
+    // speaker without one. On the card nothing blocks, so the boot sound no
+    // longer holds the machine for a second and a half before the desktop
+    // appears, and it can be a chord rather than a run of single notes.
+    static void play(int id) {
+        Native.sys(Native.SYS_SND_PLAY, id, 0, 0, 0);
     }
 
-    // Straight-line, no arrays: a static final int[] would need a class
-    // initializer, and those never run here.
     static void chime() {
-        note(523, 130);
-        note(659, 130);
-        note(784, 130);
-        note(1047, 240);
-        note(880, 130);
-        note(1047, 420);
+        play(SND_BOOT);
     }
 
     static void clickTone() {
-        Native.sys(Native.SYS_BEEP, 1800, 0, 0, 0);
-        Native.sys(Native.SYS_SLEEP, 12, 0, 0, 0);
-        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
+        play(SND_CLICK);
     }
 
     // ======================================================================
@@ -547,7 +546,7 @@ public class Boot {
             progress = progress + 10;
             if (progress > 100) progress = 100;
         } else if (f == 9) {
-            note(880, 90);
+            play(SND_WIN);
             return;
         }
         if (chkSound == 1) clickTone();
@@ -1572,7 +1571,7 @@ public class Boot {
         if (hit(mouseX, mouseY, x + 196, y + 190, 84, 26)) {
             pressedBtn = 2;
             setFocus(W_GALLERY, 9);
-            note(880, 90);
+            play(SND_WIN);
         }
 
         int row = 0;
@@ -1623,6 +1622,7 @@ public class Boot {
         else if (code == 110) k = 6;          // N
         else if (code == 112) k = 7;          // P
         else if (code == 105) k = 8;          // I, back to the artwork
+        else if (code == 109) k = 10;         // M, music on or off
         else if (code >= 32) k = 9;           // anything else dismisses the title
         if (k != 0) Native.sys(Native.SYS_WASM_KEY, k, 0, 0, 0);
         paint();
@@ -1641,7 +1641,7 @@ public class Boot {
         g.drawString("Pushes", x + 184, y + 22);
         g.drawString("Done", x + 288, y + 22);
         g.setRGB(C_DARK);
-        g.drawString("Arrows move   R restart   N/P level   I artwork", x, y + 40);
+        g.drawString("Arrows  R restart  N/P level  I artwork  M music", x, y + 40);
 
         // The guest keeps its own sound flag, so the desktop setting is pushed
         // in before every frame rather than being queried from inside.
@@ -1766,18 +1766,18 @@ public class Boot {
         if (sokoDone == 1) sokoFanfare();
     }
 
+    // Kept taking a pitch so the call sites still read as sounds rather than
+    // as ids; the mapping to a clip happens here.
     static void sokoBlip(int hz, int ms) {
         if (chkSound == 0) return;
-        Native.sys(Native.SYS_BEEP, hz, 0, 0, 0);
-        Native.sys(Native.SYS_SLEEP, ms, 0, 0, 0);
-        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
+        if (hz < 200) play(SND_BUMP);
+        else if (hz < 700) play(SND_PUSH);
+        else play(SND_STEP);
     }
 
     static void sokoFanfare() {
         if (chkSound == 0) return;
-        note(784, 110);
-        note(988, 110);
-        note(1319, 300);
+        play(SND_WIN);
     }
 
     static void sokoKey(int code) {
@@ -1976,9 +1976,8 @@ public class Boot {
         g.setRGB(C_RED);
         g.drawString("Shutting down JVMOS...", 400, 370);
         g.present();
-        note(660, 160);
-        note(440, 320);
-        Native.sys(Native.SYS_SLEEP, 400, 0, 0, 0);
+        play(SND_DENY);
+        Native.sys(Native.SYS_SLEEP, 500, 0, 0, 0);
         Native.sys(Native.SYS_EXIT, 0, 0, 0, 0);
     }
 }

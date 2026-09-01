@@ -51,6 +51,7 @@ const K_RESTART: i32 = 5;
 const K_NEXT: i32 = 6;
 const K_PREV: i32 = 7;
 const K_GALLERY: i32 = 8;
+const K_MUSIC: i32 = 10;
 
 const IMAGE_COUNT: i32 = 5;
 const IMAGE_W: i32 = 200;
@@ -102,6 +103,7 @@ static mut SOLVED: i32 = 0;
 static mut STARTED: i32 = 0;
 static mut SCREEN: i32 = SCREEN_ART;
 static mut SOUND: i32 = 1;
+static mut MUSIC_ON: i32 = 0;   // off until asked for: the window is open at boot
 static mut IMAGE: i32 = 0;
 
 /// Byte range of level `n` inside LEVELS, which stores maps separated by ";".
@@ -272,7 +274,23 @@ const MUSIC_OFF: i32 = 0;
 const MUSIC_FANFARE: i32 = 1;
 const MUSIC_THEME: i32 = 2;
 
+/// Music only plays on the artwork screen, and only once asked for. The
+/// window is open when the machine boots, so starting it by itself would mean
+/// the OS came up playing.
+unsafe fn apply_music() {
+    if MUSIC_ON == 1 && SCREEN == SCREEN_ART {
+        music(MUSIC_THEME);
+    } else {
+        music(MUSIC_OFF);
+    }
+}
+
 unsafe fn handle_art(k: i32) {
+    if k == K_MUSIC {
+        MUSIC_ON = 1 - MUSIC_ON;
+        apply_music();
+        return;
+    }
     if k == K_NEXT || k == K_RIGHT {
         IMAGE += 1;
         if IMAGE >= IMAGE_COUNT {
@@ -285,14 +303,19 @@ unsafe fn handle_art(k: i32) {
         }
     } else {
         SCREEN = SCREEN_GAME;
-        music(MUSIC_OFF);
+        apply_music();
     }
 }
 
 unsafe fn handle(k: i32) {
+    if k == K_MUSIC {
+        MUSIC_ON = 1 - MUSIC_ON;
+        apply_music();
+        return;
+    }
     if k == K_GALLERY {
         SCREEN = SCREEN_ART;
-        music(MUSIC_THEME);
+        apply_music();
         return;
     }
     if k == K_UP {
@@ -421,7 +444,6 @@ pub extern "C" fn frame() {
         if STARTED == 0 {
             STARTED = 1;
             load(LEVEL);
-            music(MUSIC_THEME);   // the theme plays over the title, as the original does
         }
 
         let mut k = key();

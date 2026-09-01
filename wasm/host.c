@@ -28,17 +28,17 @@ extern void sys_sleep(int ms);
 extern int sys_get_ticks(void);
 
 /* wasm/sb16.c */
-int sb16_init(void);
 int sb16_present(void);
-int sb16_effect(int id);
+void audio_play(int id);
 
-/* clip ids, matching the enum in sb16.c */
-#define SND_STEP 0
-#define SND_PUSH 1
-#define SND_BUMP 2
-#define SND_WIN  3
-
-static int g_audio_ready;
+/* clip ids, shared with sb16.c and kernel/Boot.java */
+#define SND_BOOT  0
+#define SND_CLICK 1
+#define SND_DENY  2
+#define SND_STEP  3
+#define SND_PUSH  4
+#define SND_BUMP  5
+#define SND_WIN   6
 
 /* Framebuffer state, for blitting pictures without a syscall per pixel. */
 extern unsigned char *vram_back_buffer;
@@ -105,13 +105,11 @@ static int hf_music(int *a, int n, void *user)
     (void)user;
     if (n < 1) return 0;
 
-    if (!g_audio_ready) {
-        g_audio_ready = 1;
-        sb16_init();
+    /* the level fanfare is a one-shot effect, not a track to sequence */
+    if (a[0] == 1) {
+        audio_play(SND_WIN);
+        return 0;
     }
-
-    /* the level fanfare is a sampled clip when the card is there */
-    if (a[0] == 1 && sb16_present() && sb16_effect(SND_WIN)) return 0;
 
     music_select(a[0]);
     return 0;
@@ -238,35 +236,26 @@ static int hf_height(int *a, int n, void *user) { (void)a; (void)n; (void)user; 
 /* PC speaker. This blocks for the duration of the note, exactly as the Java
    side does: there is no scheduler to play it in the background. */
 /*
- * An effect. With a Sound Blaster present these become sampled clips, which do
- * not block; without one they fall back to the speaker, which does. The guest
- * asks for a pitch either way and never learns which happened.
+ * An effect. The guest asks for a pitch; which clip that becomes, and whether
+ * it goes to the card or the speaker, is decided here. The guest never learns
+ * which happened.
  */
 static int hf_beep(int *a, int n, void *user)
 {
-    int hz;
+    int hz, clip;
     (void)user;
     if (n < 2) return 0;
+
     hz = a[0];
+    clip = SND_STEP;
+    if (hz < 200) clip = SND_BUMP;
+    else if (hz < 700) clip = SND_PUSH;
 
-    if (!g_audio_ready) {
-        g_audio_ready = 1;
-        sb16_init();
+    audio_play(clip);
+    if (!sb16_present()) {
+        g_sounding = 0;
+        g_note_at = sys_get_ticks() + MUSIC_GAP;   /* let the effect breathe */
     }
-
-    if (sb16_present()) {
-        int clip = SND_STEP;
-        if (hz < 200) clip = SND_BUMP;
-        else if (hz < 700) clip = SND_PUSH;
-        if (sb16_effect(clip)) return 0;
-        return 0;
-    }
-
-    sys_beep(hz);
-    sys_sleep(a[1]);
-    sys_beep(0);
-    g_sounding = 0;
-    g_note_at = sys_get_ticks() + MUSIC_GAP;   /* let the effect breathe */
     return 0;
 }
 

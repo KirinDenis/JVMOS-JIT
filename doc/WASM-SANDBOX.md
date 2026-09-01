@@ -55,6 +55,9 @@ A guest imports these from module `env`:
 | `beep(hz, ms)` | a tone on the PC speaker, then silence |
 | `music(track)` | 0 stops, 1 the fanfare once, 2 the theme looped |
 
+Music does not start by itself: the guest's window is open when the machine
+boots, so it would mean the OS came up playing. `M` turns it on.
+
 Exports: `frame()`, called once per repaint, and `set_sound(on)`, which the
 desktop pushes in so the guest follows the "Sound enabled" setting.
 

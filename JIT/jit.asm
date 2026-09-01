@@ -61,7 +61,7 @@ section .text
 	extern sys_get_time, sys_sleep, sys_exit
 	extern c_selftest
 	extern wasm_guest_frame, wasm_push_key, wasm_set_sound, wasm_music_tick
-	extern sb16_present
+	extern sb16_present, audio_play
 
 jit_init:
     push eax
@@ -359,6 +359,8 @@ sys_native_dispatch:
     je .sys_wasm_music
     cmp eax, 37
     je .sys_sb16_status
+    cmp eax, 38
+    je .sys_snd_play
 
     xor eax, eax
     jmp .done
@@ -595,6 +597,13 @@ sys_native_dispatch:
 
 .sys_sb16_status:
     call sb16_present
+    jmp .done
+
+.sys_snd_play:
+    push dword [sys_arg_a]
+    call audio_play
+    add esp, 4
+    xor eax, eax
     jmp .done
 
 .sys_c_selftest:

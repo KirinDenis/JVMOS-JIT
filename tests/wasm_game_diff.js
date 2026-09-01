@@ -20,6 +20,7 @@ const K = { UP: 1, DOWN: 2, LEFT: 3, RIGHT: 4, RESTART: 5, NEXT: 6, PREV: 7 };
 // Key sequences worth checking: plain walking, pushing a crate, restarting,
 // and moving between levels.
 const K_GALLERY = 8;
+const K_MUSIC = 10;
 
 const RUNS = [
   { name: "title_art", keys: [] },
@@ -27,6 +28,10 @@ const RUNS = [
   { name: "art_prev_wraps", keys: [K.PREV] },
   { name: "art_then_play", keys: [K.UP, K.UP, K.UP] },
   { name: "back_to_gallery", keys: [K.UP, K.UP, K_GALLERY, K.NEXT] },
+  { name: "music_starts_on_M", keys: [K_MUSIC] },
+  { name: "music_toggles_off", keys: [K_MUSIC, K_MUSIC] },
+  { name: "music_stops_in_game", keys: [K_MUSIC, K.UP] },
+  { name: "music_returns_with_art", keys: [K_MUSIC, K.UP, K_GALLERY] },
   { name: "boot", keys: [] },
   { name: "walk_up", keys: [K.UP, K.UP, K.UP] },
   { name: "walk_around", keys: [K.UP, K.LEFT, K.LEFT, K.UP, K.RIGHT, K.DOWN] },

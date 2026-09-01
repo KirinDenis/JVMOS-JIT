@@ -62,6 +62,7 @@ public class Native {
     public static final int SYS_WASM_SOUND       = 35; // Activa o silencia el sonido del invitado
     public static final int SYS_WASM_MUSIC       = 36; // Avanza el secuenciador de musica
     public static final int SYS_SB16_STATUS      = 37; // 1 si se detecto la Sound Blaster
+    public static final int SYS_SND_PLAY         = 38; // Reproduce un sonido del sistema
     public static final int SYS_STR_BYTE         = 30; // Byte i-esimo de un literal de cadena
 
 

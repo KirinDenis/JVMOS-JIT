@@ -55,6 +55,7 @@ method up by name.
 | 35 | `SYS_WASM_SOUND` | a = 1 on, 0 off | |
 | 36 | `SYS_WASM_MUSIC` | a = 1 audible, 0 silent | advances the sequencer one step |
 | 37 | `SYS_SB16_STATUS` | | 1 if a Sound Blaster answered the reset |
+| 38 | `SYS_SND_PLAY` | a = clip id, 0 boot to 6 fanfare | |
 
 The network calls target an RTL8139. That card is not emulated by v86, which
 provides an NE2000, so those three are dead code in a browser.
