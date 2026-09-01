@@ -71,6 +71,27 @@ public class Native {
     public static final int SYS_FS_ISDIR         = 43; // 1 si la entrada a es un directorio
     public static final int SYS_FS_FREE_KB       = 44; // Espacio libre en KB
     public static final int SYS_FS_TOTAL_KB      = 45; // Espacio total del volumen en KB
+    public static final int SYS_FS_EDIT          = 46; // Editor: a = operacion, b y c argumentos
+
+    // Operaciones de SYS_FS_EDIT, iguales que en fs/fat32_disk.c
+    public static final int ED_CAPACITY   = 0;
+    public static final int ED_LENGTH     = 1;
+    public static final int ED_GET        = 2;   // b = posicion
+    public static final int ED_INSERT     = 3;   // b = posicion, c = byte
+    public static final int ED_DELETE     = 4;   // b = posicion
+    public static final int ED_CLEAR      = 5;
+    public static final int ED_OPEN       = 6;   // b = indice del directorio
+    public static final int ED_SAVE       = 7;
+    public static final int ED_NAME_LEN   = 8;
+    public static final int ED_NAME_GET   = 9;   // b = posicion
+    public static final int ED_NAME_CLEAR = 10;
+    public static final int ED_NAME_PUSH  = 11;  // b = caracter
+    public static final int ED_NAME_POP   = 12;
+    public static final int ED_REMOVE     = 13;  // b = indice del directorio
+    public static final int ED_DIRTY      = 14;
+    public static final int ED_LINE_OF    = 15;  // b = posicion -> linea
+    public static final int ED_LINE_START = 16;  // b = linea    -> posicion, o -1
+    public static final int ED_LINE_END   = 17;  // b = posicion -> fin de esa linea
 
 
     // FIRMAS NATIVAS

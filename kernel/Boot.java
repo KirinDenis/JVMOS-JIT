@@ -96,13 +96,14 @@ public class Boot {
     static final int C_AMBER = 0x00C9860A;
 
     // ---- window ids ------------------------------------------------------
-    static final int WIN_COUNT = 6;
+    static final int WIN_COUNT = 7;
     static final int W_GALLERY = 0;
     static final int W_FILES = 1;
     static final int W_SYSTEM = 2;
     static final int W_ABOUT = 3;
     static final int W_SOKOBAN = 4;
     static final int W_WASM = 5;
+    static final int W_EDIT = 6;
 
     // ---- sokoban ---------------------------------------------------------
     static final int SOKO_LEVELS = 61;
@@ -172,6 +173,13 @@ public class Boot {
     static int modSel;                  // selected row in the Modules list
     static int fileSel;                 // selected entry in the File Manager
     static int fileTop;                 // first entry visible, for scrolling
+    static int fileMsg;                 // 0 none, 1 no association, 2 directory, 3 unreadable
+    static int fileArmed;               // entry Ctrl+D is armed to delete, -1 for none
+
+    static int edCursor;                // caret offset into the kernel's text buffer
+    static int edTop;                   // first visible line
+    static int edNameFocus;             // 1 while the filename field takes the keys
+    static int edStatus;                // 0 none, 1 saved, 2 save failed, 3 deleted
 
     // Returned by SYS_FS_STATUS.
     static final int FS_ABSENT = 0;     // no disk answered
@@ -234,6 +242,7 @@ public class Boot {
         setWin(W_ABOUT, 300, 220, 420, 220);
         setWin(W_SOKOBAN, 430, 120, 540, 520);
         setWin(W_WASM, 120, 150, 470, 380);
+        setWin(W_EDIT, 250, 160, 520, 400);
 
         wOpen[W_GALLERY] = 1;
         wOpen[W_FILES] = 1;
@@ -241,13 +250,17 @@ public class Boot {
         wOpen[W_ABOUT] = 0;
         wOpen[W_SOKOBAN] = 1;
         wOpen[W_WASM] = 1;
+        wOpen[W_EDIT] = 0;      // opens when a file is opened, or from the menu
 
-        zorder[0] = W_SYSTEM;
-        zorder[1] = W_GALLERY;
-        zorder[2] = W_FILES;
-        zorder[3] = W_ABOUT;
-        zorder[4] = W_SOKOBAN;
-        zorder[5] = W_WASM;
+        // The front of this list is the last entry, and handleKeys sends keys
+        // to it, so a closed window must never sit there.
+        zorder[0] = W_EDIT;
+        zorder[1] = W_SYSTEM;
+        zorder[2] = W_GALLERY;
+        zorder[3] = W_FILES;
+        zorder[4] = W_ABOUT;
+        zorder[5] = W_SOKOBAN;
+        zorder[6] = W_WASM;
 
         mouseX = 512;
         mouseY = 384;
@@ -270,6 +283,12 @@ public class Boot {
         modSel = 0;
         fileSel = 0;
         fileTop = 0;
+        fileMsg = 0;
+        fileArmed = -1;
+        edCursor = 0;
+        edTop = 0;
+        edNameFocus = 0;
+        edStatus = 0;
         fieldFocus = 0;
         fieldLen = 0;
 
@@ -394,7 +413,7 @@ public class Boot {
 
         if ((raw & M_ALT) != 0) {
             if (code == K_F4) {
-                wOpen[top] = 0;
+                closeWin(top);
                 clickTone();
                 paint();
                 return;
@@ -427,9 +446,23 @@ public class Boot {
             return;
         }
 
+        // The editor needs Tab and Escape of its own, so it is routed the raw
+        // value and handles every key itself.
+        if (top == W_EDIT && wOpen[top] == 1 && wMin[top] == 0) {
+            editorKey(raw);
+            paint();
+            return;
+        }
+
+        if (top == W_FILES && (raw & M_CTRL) != 0 && code == 'd') {
+            filesDelete();
+            paint();
+            return;
+        }
+
         if (code == K_ESC) {
             fieldFocus = 0;
-            if (wOpen[W_ABOUT] == 1) wOpen[W_ABOUT] = 0;
+            if (wOpen[W_ABOUT] == 1) closeWin(W_ABOUT);
             paint();
             return;
         }
@@ -473,6 +506,197 @@ public class Boot {
         }
     }
 
+    // The editor takes the whole keyboard while it is in front: Alt+F4,
+    // Alt+Tab and F10 are already dealt with before this is reached.
+    static void editorKey(int raw) {
+        int code = raw & K_MASK;
+        edStatus = 0;
+
+        if ((raw & M_CTRL) != 0) {
+            if (code == 's') {
+                edSave();
+                return;
+            }
+            if (code == 'n') {
+                edNew();
+                return;
+            }
+            return;                     // no other control key types a letter
+        }
+        if (code == K_TAB) {
+            edNameFocus = 1 - edNameFocus;
+            return;
+        }
+        if (edNameFocus == 1) {
+            edNameKey(code);
+            return;
+        }
+        if (code == K_ESC) return;
+        if (code == K_LEFT) {
+            if (edCursor > 0) edCursor = edCursor - 1;
+            return;
+        }
+        if (code == K_RIGHT) {
+            if (edCursor < edLen()) edCursor = edCursor + 1;
+            return;
+        }
+        if (code == K_UP) {
+            edMoveLine(-1);
+            return;
+        }
+        if (code == K_DOWN) {
+            edMoveLine(1);
+            return;
+        }
+        if (code == K_BACK) {
+            if (edCursor > 0) {
+                edCursor = edCursor - 1;
+                edCall(Native.ED_DELETE, edCursor, 0);
+            }
+            return;
+        }
+        if (code == K_ENTER) {
+            edInsert(10);
+            return;
+        }
+        if (code >= 32 && code <= 126) edInsert(code);
+    }
+
+    static void edInsert(int ch) {
+        if (edCall(Native.ED_INSERT, edCursor, ch) == 1) {
+            edCursor = edCursor + 1;
+        } else {
+            play(SND_DENY);             // the buffer is full
+        }
+    }
+
+    // Up and down keep the column where they can, which is what every editor
+    // does and what makes a short line in the middle of a file survivable.
+    static void edMoveLine(int dir) {
+        int line = edLineOf(edCursor);
+        int col = edCursor - edLineStart(line);
+        int start = edLineStart(line + dir);
+        int end;
+        if (line + dir < 0 || start < 0) return;
+        end = edLineEnd(start);
+        if (start + col > end) edCursor = end; else edCursor = start + col;
+    }
+
+    static void edNameKey(int code) {
+        if (code == K_BACK) {
+            edCall(Native.ED_NAME_POP, 0, 0);
+            return;
+        }
+        if (code == K_ENTER || code == K_ESC) {
+            edNameFocus = 0;
+            return;
+        }
+        if (code >= 32 && code <= 126) edCall(Native.ED_NAME_PUSH, edUpper(code), 0);
+    }
+
+    // 8.3 names are stored upper case. Without this a file typed as "notes"
+    // would list as "NOTES" and look like somebody else's file.
+    static int edUpper(int c) {
+        if (c >= 'a' && c <= 'z') return c - 32;
+        return c;
+    }
+
+    static void edSave() {
+        if (edCall(Native.ED_SAVE, 0, 0) == 1) {
+            edStatus = 1;
+            play(SND_CLICK);
+        } else {
+            edStatus = 2;
+            play(SND_DENY);
+        }
+    }
+
+    static void edNew() {
+        edCall(Native.ED_CLEAR, 0, 0);
+        edCursor = 0;
+        edTop = 0;
+        edNameFocus = 1;                // an unnamed file cannot be saved
+        edStatus = 0;
+    }
+
+    // ======================================================================
+    // FILE ASSOCIATION
+    //
+    // The extension is all there is to decide with: nothing here sniffs the
+    // contents. A file the editor cannot open is said to have no association
+    // rather than being opened as garbage.
+    // ======================================================================
+    static int isTextFile(int idx) {
+        int a = Native.sys(Native.SYS_FS_NAME, idx, 8, 0, 0);
+        int b = Native.sys(Native.SYS_FS_NAME, idx, 9, 0, 0);
+        int c = Native.sys(Native.SYS_FS_NAME, idx, 10, 0, 0);
+        if (a == 32 && b == 32 && c == 32) return 1;    // no extension at all
+        if (a == 'T' && b == 'X' && c == 'T') return 1;
+        if (a == 'L' && b == 'O' && c == 'G') return 1;
+        if (a == 'I' && b == 'N' && c == 'I') return 1;
+        if (a == 'C' && b == 'F' && c == 'G') return 1;
+        if (a == 'C' && b == 'S' && c == 'V') return 1;
+        if (a == 'M' && b == 'D' && c == 32) return 1;
+        return 0;
+    }
+
+    static void openSelected() {
+        int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
+        fileArmed = -1;
+        if (fileSel < 0 || fileSel >= count) return;
+        if (Native.sys(Native.SYS_FS_ISDIR, fileSel, 0, 0, 0) == 1) {
+            fileMsg = 2;
+            play(SND_DENY);
+            return;
+        }
+        if (isTextFile(fileSel) == 0) {
+            fileMsg = 1;
+            play(SND_DENY);
+            return;
+        }
+        if (edCall(Native.ED_OPEN, fileSel, 0) < 0) {
+            fileMsg = 3;
+            play(SND_DENY);
+            return;
+        }
+        fileMsg = 0;
+        edCursor = 0;
+        edTop = 0;
+        edNameFocus = 0;
+        edStatus = 0;
+        wOpen[W_EDIT] = 1;
+        wMin[W_EDIT] = 0;
+        raiseWin(W_EDIT);
+        play(SND_CLICK);
+    }
+
+    // Deleting asks twice. Losing a file to one stray keystroke is not a
+    // consequence of anything the user decided, it is just a bad control.
+    // Moving the selection disarms a pending delete: the confirmation belongs
+    // to one entry, and it must not survive onto a different one.
+    static void filesTouched() {
+        fileArmed = -1;
+        fileMsg = 0;
+    }
+
+    static void filesDelete() {
+        int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
+        if (fileSel < 0 || fileSel >= count) return;
+        if (fileArmed != fileSel) {
+            fileArmed = fileSel;
+            fileMsg = 4;
+            return;
+        }
+        fileArmed = -1;
+        if (edCall(Native.ED_REMOVE, fileSel, 0) == 1) {
+            fileMsg = 5;
+            play(SND_CLICK);
+        } else {
+            fileMsg = 3;
+            play(SND_DENY);
+        }
+    }
+
     static void menuKey(int code) {
         if (code == K_ESC) {
             menuOpen = -1;
@@ -513,6 +737,7 @@ public class Boot {
             // Bounded by what is actually on the disk, not by a fixed six.
             int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
             if (fileSel < count - 1) fileSel = fileSel + 1;
+            filesTouched();
             return;
         }
         if (i == W_GALLERY && focus[i] == F_LIST) {
@@ -525,6 +750,7 @@ public class Boot {
     static void stepUp(int i) {
         if (i == W_FILES) {
             if (fileSel > 0) fileSel = fileSel - 1;
+            filesTouched();
             return;
         }
         if (i == W_GALLERY && focus[i] == F_LIST) {
@@ -537,8 +763,12 @@ public class Boot {
     static void activate(int i) {
         int f = focus[i];
         if (i == W_ABOUT) {
-            wOpen[W_ABOUT] = 0;
+            closeWin(W_ABOUT);
             clickTone();
+            return;
+        }
+        if (i == W_FILES) {
+            openSelected();
             return;
         }
         if (i != W_GALLERY) return;
@@ -676,7 +906,7 @@ public class Boot {
         int by = wy[i] + BORDER + (TITLE_H - BORDER - TBTN) / 2;
         int bx = wx[i] + ww[i] - 26;
         if (hit(mouseX, mouseY, bx, by, TBTN, TBTN)) {
-            wOpen[i] = 0;
+            closeWin(i);
             clickTone();
             paint();
             return true;
@@ -762,7 +992,7 @@ public class Boot {
     }
 
     static int menuItems(int m) {
-        if (m == 0) return 3;
+        if (m == 0) return 4;
         if (m == 1) return 2;
         return 1;
     }
@@ -785,10 +1015,14 @@ public class Boot {
     static void menuAction(int m, int item) {
         if (m == 0) {
             if (item == 0) {
-                openAll();
+                edNew();
+                wOpen[W_EDIT] = 1;
+                wMin[W_EDIT] = 0;
+                raiseWin(W_EDIT);
             } else if (item == 1) {
-                int top = zorder[WIN_COUNT - 1];
-                wOpen[top] = 0;
+                openAll();
+            } else if (item == 2) {
+                closeWin(zorder[WIN_COUNT - 1]);
             } else {
                 shutdown();
             }
@@ -835,6 +1069,25 @@ public class Boot {
             }
             i = i + 1;
         }
+    }
+
+    // Closing a window also sinks it to the bottom of the z-order. Without
+    // that it stays the front window while shut, and handleKeys keeps sending
+    // every keystroke to something nobody can see.
+    static void closeWin(int i) {
+        int at = 0;
+        int k = 0;
+        while (k < WIN_COUNT) {
+            if (zorder[k] == i) at = k;
+            k = k + 1;
+        }
+        k = at;
+        while (k > 0) {
+            zorder[k] = zorder[k - 1];
+            k = k - 1;
+        }
+        zorder[0] = i;
+        wOpen[i] = 0;
     }
 
     static void raiseWin(int i) {
@@ -990,6 +1243,9 @@ public class Boot {
         if (i == W_SYSTEM) return "System Info";
         if (i == W_SOKOBAN) return "Sokoban";
         if (i == W_WASM) return "Sokoban (Rust)";
+        // The filename cannot go in the title: only string literals can be
+        // drawn, so it is shown inside the window instead. See JAVA-RULES.md.
+        if (i == W_EDIT) return "Text Editor";
         return "About JVMOS";
     }
 
@@ -1068,9 +1324,10 @@ public class Boot {
         g.fillRect(x, MENU_H, 180, h);
         bevel(x, MENU_H, 180, h, 0);
         if (menuOpen == 0) {
-            dropItem("Open All Windows", x, 0);
-            dropItem("Close Active Window", x, 1);
-            dropItem("Shut Down", x, 2);
+            dropItem("New Text File", x, 0);
+            dropItem("Open All Windows", x, 1);
+            dropItem("Close Active Window", x, 2);
+            dropItem("Shut Down", x, 3);
         } else if (menuOpen == 1) {
             dropItem("Cascade Windows", x, 0);
             dropItem("Restore All", x, 1);
@@ -1101,20 +1358,31 @@ public class Boot {
 
         int bx = 8;
         int i = 0;
+        int open = 0;
+        int tw = 128;
+        while (i < WIN_COUNT) {
+            if (wOpen[i] == 1) open = open + 1;
+            i = i + 1;
+        }
+        // With every window open the tiles would reach the clock, so they get
+        // narrower rather than running underneath it.
+        if (open > 6) tw = 108;
+
+        i = 0;
         while (i < WIN_COUNT) {
             if (wOpen[i] == 1) {
                 boolean front = wMin[i] == 0 && zorder[WIN_COUNT - 1] == i;
                 if (front) {
                     g.setRGB(C_SURF2);
-                    g.fillRect(bx, TASK_Y + 1, 128, TASK_H - 1);
+                    g.fillRect(bx, TASK_Y + 1, tw, TASK_H - 1);
                     g.setRGB(C_SEL);
-                    g.fillRect(bx, TASK_Y + 1, 128, 2);
+                    g.fillRect(bx, TASK_Y + 1, tw, 2);
                     g.setRGB(C_TEXT);
                 } else {
                     g.setRGB(C_DARK);
                 }
                 g.drawString(winTitle(i), bx + 8, TASK_Y + (TASK_H - CH_H) / 2);
-                bx = bx + 134;
+                bx = bx + tw + 6;
             }
             i = i + 1;
         }
@@ -1333,6 +1601,8 @@ public class Boot {
             drawSokoban(x, y, w, h);
         } else if (i == W_WASM) {
             drawWasm(x, y, w, h);
+        } else if (i == W_EDIT) {
+            drawEditor(x, y, w, h);
         } else {
             drawAbout(x, y, w, h);
         }
@@ -1437,7 +1707,7 @@ public class Boot {
             return;
         }
 
-        int rows = (h - 30) / 24;
+        int rows = (h - 30 - 20) / 24;      // the bottom line carries the hint
         if (rows < 1) rows = 1;
 
         // Keep the selection inside the visible window, whatever the height.
@@ -1456,6 +1726,37 @@ public class Boot {
         if (isActive(W_FILES)) {
             focusRing(x, y + 28 + (fileSel - fileTop) * 24, w, 24);
         }
+        drawFilesHint(x + 8, y + h - 16);
+    }
+
+    static void drawFilesHint(int x, int y) {
+        if (fileMsg == 1) {
+            g.setRGB(C_DARK);
+            g.drawString("No application is associated with that file.", x, y);
+            return;
+        }
+        if (fileMsg == 2) {
+            g.setRGB(C_DARK);
+            g.drawString("This volume has no subdirectories yet.", x, y);
+            return;
+        }
+        if (fileMsg == 3) {
+            g.setRGB(C_RED);
+            g.drawString("The file could not be read.", x, y);
+            return;
+        }
+        if (fileMsg == 4) {
+            g.setRGB(C_AMBER);
+            g.drawString("Press Ctrl+D again to delete it.", x, y);
+            return;
+        }
+        if (fileMsg == 5) {
+            g.setRGB(C_GREEN);
+            g.drawString("Deleted.", x, y);
+            return;
+        }
+        g.setRGB(C_DARK);
+        g.drawString("Enter opens   Ctrl+D deletes", x, y);
     }
 
     // Free space, from walking the FAT rather than from the cached FSInfo
@@ -1520,6 +1821,144 @@ public class Boot {
             nx = g.drawChar((char) c, nx, y);
             i = i + 1;
         }
+    }
+
+    // ======================================================================
+    // TEXT EDITOR
+    //
+    // The text being edited lives in the kernel, not in this class. That is
+    // forced, not chosen: this JIT can only draw string literals, because a
+    // literal is a constant pool pointer with its length stored in front of
+    // it, and a string built at runtime has no such header. So Java keeps the
+    // caret and nothing else, and reads the text back a character at a time.
+    // ======================================================================
+    static int edCall(int op, int a, int b) {
+        return Native.sys(Native.SYS_FS_EDIT, op, a, b, 0);
+    }
+
+    static int edLen() {
+        return edCall(Native.ED_LENGTH, 0, 0);
+    }
+
+    static int edGet(int off) {
+        return edCall(Native.ED_GET, off, 0);
+    }
+
+    static void drawEditor(int x, int y, int w, int h) {
+        int rows = (h - 30 - 20) / CH_H;
+        int cols = (w - 12) / 8;
+        if (rows < 1) rows = 1;
+        if (cols < 8) cols = 8;
+
+        panel(x, y, w, 22, C_FACE, 1);
+        g.setRGB(C_TEXT);
+        g.drawString("File:", x + 6, y + 3);
+        drawEditName(x + 52, y + 3, w - 58);
+
+        edScroll(rows);
+        drawEditText(x + 6, y + 28, rows, cols);
+        drawEditHint(x + 6, y + h - 16);
+    }
+
+    static void drawEditName(int x, int y, int w) {
+        int n = edCall(Native.ED_NAME_LEN, 0, 0);
+        int i = 0;
+        int nx = x;
+        if (edNameFocus == 1) {
+            g.setRGB(C_SURF2);
+            g.fillRect(x - 3, y - 3, w - 60, 20);
+            g.setRGB(C_SEL);
+            g.fillRect(x - 3, y + 15, w - 60, 2);
+        }
+        g.setRGB(C_TEXT);
+        while (i < n) {
+            nx = g.drawChar((char) edCall(Native.ED_NAME_GET, i, 0), nx, y);
+            i = i + 1;
+        }
+        if (edNameFocus == 1) {
+            g.setRGB(C_SEL);
+            g.fillRect(nx, y, 2, CH_H);
+        } else if (n == 0) {
+            g.setRGB(C_DARK);
+            g.drawString("(unnamed)", x, y);
+        }
+        if (edCall(Native.ED_DIRTY, 0, 0) == 1) {
+            g.setRGB(C_AMBER);
+            g.drawString("edited", x + w - 56, y);
+        }
+    }
+
+    // Jumps straight to the first visible line and stops when the window is
+    // full, so drawing costs what is on screen and not what the file holds.
+    static void drawEditText(int x, int y, int rows, int cols) {
+        int len = edLen();
+        int i = edLineStart(edTop);
+        int row = 0;
+        int col = 0;
+        int c;
+
+        if (i < 0) i = len;
+        while (row < rows) {
+            if (i == edCursor) {
+                g.setRGB(C_SEL);
+                g.fillRect(x + col * 8, y + row * CH_H, 2, CH_H);
+            }
+            if (i >= len) return;
+            c = edGet(i);
+            if (c == 10) {
+                row = row + 1;
+                col = 0;
+            } else if (c == 9) {
+                col = col + 4;                  // a tab is four columns here
+            } else if (c >= 32 && c <= 126) {
+                if (col < cols) {
+                    g.setRGB(C_TEXT);
+                    g.drawChar((char) c, x + col * 8, y + row * CH_H);
+                }
+                col = col + 1;
+            }
+            // A lone carriage return draws nothing: files here are written
+            // CRLF, and printing it would put a box at the end of every line.
+            i = i + 1;
+        }
+    }
+
+    static void drawEditHint(int x, int y) {
+        if (edStatus == 1) {
+            g.setRGB(C_GREEN);
+            g.drawString("Saved.", x, y);
+            return;
+        }
+        if (edStatus == 2) {
+            g.setRGB(C_RED);
+            g.drawString("Not saved: the name is empty, or the disk is full.", x, y);
+            return;
+        }
+        g.setRGB(C_DARK);
+        g.drawString("Ctrl+S save   Ctrl+N new   Tab rename", x, y);
+    }
+
+    static void edScroll(int rows) {
+        int line = edLineOf(edCursor);
+        if (line < edTop) edTop = line;
+        if (line >= edTop + rows) edTop = line - rows + 1;
+        if (edTop < 0) edTop = 0;
+    }
+
+    // Line arithmetic is done in the kernel. Doing it here means one syscall
+    // per byte of the whole file on every frame, just to find where the
+    // caret's line starts; there it is one syscall and a loop over an array.
+    static int edLineOf(int off) {
+        return edCall(Native.ED_LINE_OF, off, 0);
+    }
+
+    // Offset where a line begins, or -1 if there is no such line.
+    static int edLineStart(int line) {
+        return edCall(Native.ED_LINE_START, line, 0);
+    }
+
+    static int edLineEnd(int start) {
+        return edCall(Native.ED_LINE_END, start, 0);
     }
 
     static void drawSystem(int x, int y, int w, int h) {
@@ -1602,6 +2041,8 @@ public class Boot {
             galleryClick(cx, cy);
         } else if (i == W_FILES) {
             filesClick(cx, cy, ww[i] - 2 * BORDER - 22);
+        } else if (i == W_EDIT) {
+            editorClick(cx, cy, wh[i] - TITLE_H - BORDER - 21);
         } else if (i == W_ABOUT) {
             aboutClick(cx, cy, i);
         }
@@ -1678,11 +2119,37 @@ public class Boot {
             if (hit(mouseX, mouseY, x, y + 30 + row * 24, w, 20)) {
                 if (fileTop + row < count) {
                     fileSel = fileTop + row;
+                    filesTouched();
                     if (chkSound == 1) clickTone();
                 }
             }
             row = row + 1;
         }
+    }
+
+    // Clicking in the text puts the caret where the click was, clamped to the
+    // end of that line so a click past a short line lands somewhere sensible.
+    static void editorClick(int x, int y, int h) {
+        int rows = (h - 30 - 20) / CH_H;
+        int row = (mouseY - (y + 28)) / CH_H;
+        int col = (mouseX - (x + 6)) / 8;
+        int start;
+        int end;
+        if (mouseY < y + 26) {
+            edNameFocus = 1;
+            return;
+        }
+        edNameFocus = 0;
+        if (row < 0) row = 0;
+        if (rows > 0 && row >= rows) row = rows - 1;
+        if (col < 0) col = 0;
+        start = edLineStart(edTop + row);
+        if (start < 0) {
+            edCursor = edLen();
+            return;
+        }
+        end = edLineEnd(start);
+        if (start + col > end) edCursor = end; else edCursor = start + col;
     }
 
     // x,y are the content origin; recompute the content box exactly as
@@ -1691,7 +2158,7 @@ public class Boot {
         int cw = ww[i] - 2 * BORDER - 22;
         int ch = wh[i] - TITLE_H - BORDER - 21;
         if (hit(mouseX, mouseY, x + cw / 2 - 42, y + ch - 40, 84, 26)) {
-            wOpen[W_ABOUT] = 0;
+            closeWin(W_ABOUT);
             clickTone();
         }
     }

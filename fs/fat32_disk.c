@@ -8,6 +8,7 @@
  * exercise the identical code where a debugger exists.
  */
 #include "fat32.h"
+#include "fsedit.h"
 
 extern int sys_disk_read_sector(unsigned lba, unsigned char *buffer);
 extern int sys_disk_write_sector(unsigned lba, const unsigned char *buffer);
@@ -201,4 +202,173 @@ int fs_total_kb(void)
 {
     if (g_status != FS_MOUNTED && g_status != FS_FORMATTED) return 0;
     return (int)(g_fs.cluster_count * g_fs.sectors_per_cluster / 2);
+}
+
+/* ---------------------------------------------------------- edit buffer */
+/* Java holds the caret and nothing else; see fsedit.h for why. Insert and
+   delete do their shifting here, where moving a byte costs one loop iteration
+   rather than one syscall. */
+
+static unsigned char g_text[FS_TEXT_MAX];
+static unsigned g_text_len;
+static char g_name[FS_NAME_MAX + 1];
+static unsigned g_name_len;
+static int g_dirty;
+
+static void name_clear(void)
+{
+    unsigned i;
+    for (i = 0; i <= FS_NAME_MAX; i++) g_name[i] = 0;
+    g_name_len = 0;
+}
+
+/* Turns the on-disk "README  TXT" back into "README.TXT". */
+static void name_unpack(const char *packed)
+{
+    int i, end;
+
+    name_clear();
+    for (end = 8; end > 0 && packed[end - 1] == ' '; end--) { }
+    for (i = 0; i < end; i++) g_name[g_name_len++] = packed[i];
+
+    for (end = 11; end > 8 && packed[end - 1] == ' '; end--) { }
+    if (end > 8) {
+        g_name[g_name_len++] = '.';
+        for (i = 8; i < end; i++) g_name[g_name_len++] = packed[i];
+    }
+    g_name[g_name_len] = 0;
+}
+
+static int text_insert(unsigned off, int ch)
+{
+    unsigned i;
+    if (g_text_len >= FS_TEXT_MAX) return 0;
+    if (off > g_text_len) return 0;
+    for (i = g_text_len; i > off; i--) g_text[i] = g_text[i - 1];
+    g_text[off] = (unsigned char)ch;
+    g_text_len++;
+    g_dirty = 1;
+    return 1;
+}
+
+static int text_delete(unsigned off)
+{
+    unsigned i;
+    if (off >= g_text_len) return 0;
+    for (i = off; i + 1 < g_text_len; i++) g_text[i] = g_text[i + 1];
+    g_text_len--;
+    g_dirty = 1;
+    return 1;
+}
+
+static int text_open(int index)
+{
+    fat32_entry e;
+    int n;
+
+    if (!fat32_list(&g_fs, (unsigned)index, &e)) return -1;
+    if (e.is_dir) return -1;
+
+    name_unpack(e.name);
+    n = fat32_read_file(&g_fs, g_name, g_text, FS_TEXT_MAX);
+    if (n < 0) return -1;
+    g_text_len = (unsigned)n;
+    g_dirty = 0;
+    return n;
+}
+
+static int text_save(void)
+{
+    if (g_name_len == 0) return 0;
+    if (g_status != FS_MOUNTED && g_status != FS_FORMATTED) return 0;
+    if (!fat32_write_file(&g_fs, g_name, g_text, g_text_len)) return 0;
+    g_dirty = 0;
+    return 1;
+}
+
+static int line_of(int off)
+{
+    unsigned i, line = 0;
+    if (off < 0) return 0;
+    if ((unsigned)off > g_text_len) off = (int)g_text_len;
+    for (i = 0; i < (unsigned)off; i++) {
+        if (g_text[i] == '\n') line++;
+    }
+    return (int)line;
+}
+
+static int line_start(int line)
+{
+    unsigned i, n = 0;
+    if (line <= 0) return 0;
+    for (i = 0; i < g_text_len; i++) {
+        if (g_text[i] == '\n') {
+            n++;
+            if (n == (unsigned)line) return (int)(i + 1);
+        }
+    }
+    return -1;
+}
+
+static int line_end(int off)
+{
+    unsigned i;
+    if (off < 0) off = 0;
+    for (i = (unsigned)off; i < g_text_len && g_text[i] != '\n'; i++) { }
+    return (int)i;
+}
+
+static int text_remove(int index)
+{
+    fat32_entry e;
+    if (!fat32_list(&g_fs, (unsigned)index, &e)) return 0;
+    if (e.is_dir) return 0;
+    name_unpack(e.name);
+    return fat32_delete_file(&g_fs, g_name);
+}
+
+int fs_edit(int op, int a, int b)
+{
+    if (op == ED_CAPACITY) return FS_TEXT_MAX;
+    if (op == ED_LENGTH) return (int)g_text_len;
+    if (op == ED_GET) {
+        if (a < 0 || (unsigned)a >= g_text_len) return -1;
+        return g_text[a];
+    }
+    if (op == ED_INSERT) return text_insert((unsigned)a, b);
+    if (op == ED_DELETE) return text_delete((unsigned)a);
+    if (op == ED_CLEAR) {
+        g_text_len = 0;
+        g_dirty = 0;
+        name_clear();
+        return 1;
+    }
+    if (op == ED_OPEN) return text_open(a);
+    if (op == ED_SAVE) return text_save();
+    if (op == ED_NAME_LEN) return (int)g_name_len;
+    if (op == ED_NAME_GET) {
+        if (a < 0 || (unsigned)a >= g_name_len) return -1;
+        return (unsigned char)g_name[a];
+    }
+    if (op == ED_NAME_CLEAR) {
+        name_clear();
+        return 1;
+    }
+    if (op == ED_NAME_PUSH) {
+        if (g_name_len >= FS_NAME_MAX) return 0;
+        g_name[g_name_len++] = (char)a;
+        g_name[g_name_len] = 0;
+        return 1;
+    }
+    if (op == ED_NAME_POP) {
+        if (g_name_len == 0) return 0;
+        g_name[--g_name_len] = 0;
+        return 1;
+    }
+    if (op == ED_REMOVE) return text_remove(a);
+    if (op == ED_DIRTY) return g_dirty;
+    if (op == ED_LINE_OF) return line_of(a);
+    if (op == ED_LINE_START) return line_start(a);
+    if (op == ED_LINE_END) return line_end(a);
+    return 0;
 }

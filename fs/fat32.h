@@ -61,6 +61,9 @@ int fat32_read_file(fat32_fs *fs, const char *name, unsigned char *buffer, unsig
 /* Creates or replaces a file in the root. Returns 1 on success. */
 int fat32_write_file(fat32_fs *fs, const char *name, const unsigned char *data, unsigned length);
 
+/* Releases a file's clusters and frees its directory slot. 1 on success. */
+int fat32_delete_file(fat32_fs *fs, const char *name);
+
 /* Turns "README.TXT" into the padded on-disk form "README  TXT". */
 void fat32_pack_name(const char *name, char *out11);
 

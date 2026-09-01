@@ -52,6 +52,41 @@ enough to keep programs and data on the disk, which is what the system was
 missing. Subdirectories and long names can be added later without changing the
 layout or the syscalls.
 
+# Creating and editing files
+
+The File Manager lists the real root directory. Enter opens the selected file,
+Ctrl+D deletes it, and the Applications menu has New Text File.
+
+Deleting asks twice: the first Ctrl+D arms it and says so, the second does it,
+and moving the selection disarms it. Losing a file to one stray keystroke is not
+a consequence of any decision the user made, it is just a bad control.
+
+## Association
+
+Opening a file means deciding what can open it, and the extension is all there
+is to decide with: nothing sniffs the contents. `TXT`, `LOG`, `INI`, `CFG`,
+`CSV`, `MD` and files with no extension at all go to the text editor. Anything
+else is reported as having no association rather than being opened as garbage.
+The table is `isTextFile` in `kernel/Boot.java`.
+
+## Where the text lives
+
+Not in Java. This JIT can only draw string literals, because a literal is a
+constant pool pointer with its length stored in the two bytes in front of it,
+and a string built at runtime has no such header (see
+[JAVA-RULES.md](JAVA-RULES.md) rule 4). A Java text editor would have nothing it
+could put on the screen.
+
+So the buffer is in the kernel, in `fs/fat32_disk.c`, and Java keeps the caret
+and nothing else. It reads the text back one character at a time to draw it, and
+changes it through insert and delete, which do their shifting in C where moving
+a byte costs a loop iteration instead of a syscall.
+
+Line arithmetic is in the kernel for the same reason. Finding where the caret's
+line begins by walking from Java would be one syscall per byte of the file on
+every single frame; `ED_LINE_START` makes drawing cost what the window shows
+rather than what the file holds.
+
 # The 65525 problem
 
 The disk the project ships is 10MB, which with 512 byte clusters gives 18114

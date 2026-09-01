@@ -63,10 +63,16 @@ method up by name.
 | 43 | `SYS_FS_ISDIR` | a = entry | 1 for a directory |
 | 44 | `SYS_FS_FREE_KB` | | free space, from walking the FAT |
 | 45 | `SYS_FS_TOTAL_KB` | | size of the volume |
+| 46 | `SYS_FS_EDIT` | a = operation, b and c its arguments | depends on the operation |
 
 Names come back one byte at a time because a syscall returns an `int` and
 nothing else. Allocating a Java string inside the kernel is a far larger thing
 to get right than a loop, and string literals already cross the same way.
+
+`SYS_FS_EDIT` is the whole text editor behind one id. Its operations are listed
+in `fs/fsedit.h` and mirrored in `kernel/Native.java`; the dispatcher below is a
+chain of compares, so eighteen more branches for one window would have cost
+every other syscall in the system a little.
 
 The network calls target an RTL8139. That card is not emulated by v86, which
 provides an NE2000, so those three are dead code in a browser.

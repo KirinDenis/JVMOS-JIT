@@ -63,7 +63,7 @@ section .text
 	extern wasm_guest_frame, wasm_push_key, wasm_set_sound, wasm_music_tick
 	extern sb16_present, audio_play
 	extern fs_status, fs_count, fs_name_byte, fs_entry_size, fs_entry_is_dir
-	extern fs_free_kb, fs_total_kb
+	extern fs_free_kb, fs_total_kb, fs_edit
 
 jit_init:
     push eax
@@ -377,6 +377,8 @@ sys_native_dispatch:
     je .sys_fs_free
     cmp eax, 45
     je .sys_fs_total
+    cmp eax, 46
+    je .sys_fs_edit
 
     xor eax, eax
     jmp .done
@@ -659,6 +661,17 @@ sys_native_dispatch:
 
 .sys_fs_total:
     call fs_total_kb
+    jmp .done
+
+; Un solo punto de entrada para todo el editor: a = operacion, b y c sus
+; argumentos. Catorce ramas mas en esta cadena de comparaciones costarian algo
+; a todas las demas syscalls del sistema.
+.sys_fs_edit:
+    push dword [sys_arg_c]
+    push dword [sys_arg_b]
+    push dword [sys_arg_a]
+    call fs_edit
+    add esp, 12
     jmp .done
 
 .sys_c_selftest:

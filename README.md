@@ -21,6 +21,8 @@ It boots in a browser, with no install: https://kirindenis.github.io/JVMOS-JIT/
   with every linear memory access bounds checked
 * A FAT32 volume the system mounts at boot, and formats itself if the disk is
   blank, keeping the first megabyte outside the partition for a system image
+* A text editor, and file associations: the File Manager lists the real
+  directory, and Enter opens a file in whatever handles its extension
 
 # Requirements
 * C-Compiler: gcc-12

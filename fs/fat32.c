@@ -433,6 +433,30 @@ int fat32_write_file(fat32_fs *fs, const char *name, const unsigned char *data, 
     return fat_write_sector(lba, g_sector);
 }
 
+/*
+ * Deleting is what FAT has always done: release the clusters and mark the
+ * directory entry with 0xE5 rather than moving anything. fat32_write_file
+ * already reuses a 0xE5 slot, so the space comes back on both counts.
+ */
+int fat32_delete_file(fat32_fs *fs, const char *name)
+{
+    char packed[FAT_NAME_LEN + 1];
+    unsigned char raw[32];
+    unsigned slot, lba, off, first;
+
+    if (!fs->mounted) return 0;
+    fat32_pack_name(name, packed);
+    if (!find_entry(fs, packed, &slot, raw)) return 0;
+
+    first = (get16(&raw[20]) << 16) | get16(&raw[26]);
+    if (first >= 2) free_chain(fs, first);
+
+    if (!root_slot_read(fs, slot, raw, &lba, &off)) return 0;
+    if (!fat_read_sector(lba, g_sector)) return 0;
+    g_sector[off] = 0xE5;
+    return fat_write_sector(lba, g_sector);
+}
+
 /* ---------------------------------------------------------- free space */
 
 /*

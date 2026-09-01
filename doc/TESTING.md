@@ -105,6 +105,25 @@ What this has already caught:
 * the welcome file's length, counted by hand as 258 when it is 253. It is
   measured at runtime now instead of written down.
 
+# The editor, through the code the kernel actually runs
+
+`tests/fs_edit_test.c` links the real `fs/fat32_disk.c` and points the ATA
+syscalls at an image file, so the whole path the editor uses is exercised where
+its result can be read: format, open the file, unpack `README  TXT` back into
+`README.TXT`, type, insert in the middle, name it, save, reopen it as a fresh
+boot would, overwrite it without duplicating the entry, and delete it.
+
+```
+cl /nologo /W4 /Fe:build\fs_edit_test.exe tests\fs_edit_test.c fs\fat32_disk.c fs\fat32.c
+build\fs_edit_test.exe disk.img
+node tests\fat32_verify.js disk.img
+```
+
+Running the independent reader afterwards is the point of the last step: it
+confirms that creating, overwriting and deleting left a volume that something
+other than our own driver still considers valid, and that the deleted file's
+clusters really went back to the FAT.
+
 # What still cannot be checked here
 The assembler and the picture. There is no nasm and no gcc on a typical Windows
 machine, so `boot/*.asm` and the kernel link are only proven by CI, and how it
