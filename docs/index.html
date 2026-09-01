@@ -123,6 +123,32 @@
     max-width: 640px;
   }
   footer a { color: var(--accent); }
+  /* COM1 log: the kernel narrates its whole boot over the serial port
+     (JIT panics and HAL exceptions included), which is the only way to see
+     where it stopped when the screen freezes. */
+  #logwrap {
+    width: 1024px;
+    max-width: 100%;
+    margin-top: 12px;
+  }
+  #logwrap summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.82rem;
+    padding: 4px 0;
+  }
+  #log {
+    background: #07090c;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: #9fe0a0;
+    font: 12px/1.45 Consolas, "Courier New", monospace;
+    padding: 10px 12px;
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 </style>
 </head>
 <body>
@@ -149,6 +175,11 @@
   <button id="btn-fullscreen" disabled>Fullscreen</button>
 </div>
 <div id="status">Click Start to boot os.iso + disk.img.</div>
+
+<details id="logwrap" open>
+  <summary>Serial console (COM1) — kernel boot log</summary>
+  <div id="log">waiting for boot...</div>
+</details>
 
 <footer>
   Source: <a href="https://github.com/KirinDenis/JVMOS-JIT" target="_blank" rel="noopener">JVMOS-JIT</a> —
@@ -203,6 +234,7 @@
       return;
     }
 
+    window.__emu = emulator; // debugging handle: speed checks, state dumps
     attachListeners();
   }
 
@@ -220,7 +252,29 @@
     };
   }
 
+  function attachSerial() {
+    var logEl = document.getElementById("log");
+    var buf = "";
+    var pending = false;
+    // Exposed so tooling (and the console) can read the log back verbatim.
+    window.__serial = function () { return buf; };
+    emulator.add_listener("serial0-output-byte", function (byte) {
+      buf += String.fromCharCode(byte);
+      if (buf.length > 200000) buf = buf.slice(-200000);
+      if (pending) return;
+      pending = true;
+      // Batch DOM writes: the kernel can emit thousands of bytes per second.
+      requestAnimationFrame(function () {
+        pending = false;
+        logEl.textContent = buf;
+        logEl.scrollTop = logEl.scrollHeight;
+      });
+    });
+  }
+
   function attachListeners() {
+    attachSerial();
+
     emulator.add_listener("emulator-loaded", function () {
       setStatus("Kernel booting — click the screen to capture keyboard/mouse.");
       resetBtn.disabled = false;
