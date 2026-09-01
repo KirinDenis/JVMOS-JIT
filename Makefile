@@ -6,7 +6,8 @@ LD      = ld
 AS      = nasm
 JAVAC   = javac
 
-CFLAGS  = -m32 -ffreestanding -fno-pic -fno-stack-protector -fno-builtin -nostdlib -O2 -Wall -Wextra -Iinclude
+CFLAGS  = -m32 -ffreestanding -fno-pic -fno-stack-protector -fno-builtin -nostdlib -O2 -Wall -Wextra -Iinclude \
+          -mno-mmx -mno-sse -mno-sse2 -fno-asynchronous-unwind-tables
 ASFLAGS = -f elf32
 LDFLAGS = -m elf_i386 -T linker.ld
 
@@ -16,6 +17,9 @@ OS_ISO     = os.iso
 
 # Captura de fuentes
 C_SOURCES   := $(wildcard *.c) $(wildcard */*.c)
+# Host-side test harnesses are ordinary programs with their own main(); they
+# must never be linked into the kernel.
+C_SOURCES   := $(filter-out $(wildcard tests/*.c), $(C_SOURCES))
 ASM_SOURCES := $(wildcard *.asm) $(wildcard */*.asm) $(wildcard */*/*.asm)
 ASM_SOURCES := $(filter-out boot/boot_class.asm, $(ASM_SOURCES))
 
@@ -62,6 +66,9 @@ kernel/Boot.class: $(JAVA_SOURCES)
 
 %.o: %.asm
 	$(AS) $(ASFLAGS) $< -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(KERNEL_BIN): $(ALL_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)

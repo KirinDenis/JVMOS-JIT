@@ -96,12 +96,13 @@ public class Boot {
     static final int C_AMBER = 0x00C9860A;
 
     // ---- window ids ------------------------------------------------------
-    static final int WIN_COUNT = 5;
+    static final int WIN_COUNT = 6;
     static final int W_GALLERY = 0;
     static final int W_FILES = 1;
     static final int W_SYSTEM = 2;
     static final int W_ABOUT = 3;
     static final int W_SOKOBAN = 4;
+    static final int W_WASM = 5;
 
     // ---- sokoban ---------------------------------------------------------
     static final int SOKO_LEVELS = 61;
@@ -216,18 +217,21 @@ public class Boot {
         setWin(W_SYSTEM, 150, 430, 430, 250);
         setWin(W_ABOUT, 300, 220, 420, 220);
         setWin(W_SOKOBAN, 430, 120, 540, 520);
+        setWin(W_WASM, 120, 150, 400, 330);
 
         wOpen[W_GALLERY] = 1;
         wOpen[W_FILES] = 1;
         wOpen[W_SYSTEM] = 1;
         wOpen[W_ABOUT] = 0;
         wOpen[W_SOKOBAN] = 1;
+        wOpen[W_WASM] = 1;
 
         zorder[0] = W_SYSTEM;
         zorder[1] = W_GALLERY;
         zorder[2] = W_FILES;
         zorder[3] = W_ABOUT;
         zorder[4] = W_SOKOBAN;
+        zorder[5] = W_WASM;
 
         mouseX = 512;
         mouseY = 384;
@@ -700,7 +704,7 @@ public class Boot {
         int i = 0;
         while (i < WIN_COUNT) {
             if (wOpen[i] == 1) {
-                if (hit(mouseX, mouseY, bx, TASK_Y + 4, 150, TASK_H - 8)) {
+                if (hit(mouseX, mouseY, bx, TASK_Y + 4, 128, TASK_H - 8)) {
                     if (wMin[i] == 1) {
                         wMin[i] = 0;
                         raiseWin(i);
@@ -713,7 +717,7 @@ public class Boot {
                     paint();
                     return;
                 }
-                bx = bx + 156;
+                bx = bx + 134;
             }
             i = i + 1;
         }
@@ -969,6 +973,7 @@ public class Boot {
         if (i == W_FILES) return "File Manager";
         if (i == W_SYSTEM) return "System Info";
         if (i == W_SOKOBAN) return "Sokoban";
+        if (i == W_WASM) return "WASM Sandbox";
         return "About JVMOS";
     }
 
@@ -1085,15 +1090,15 @@ public class Boot {
                 boolean front = wMin[i] == 0 && zorder[WIN_COUNT - 1] == i;
                 if (front) {
                     g.setRGB(0x00263445);
-                    g.fillRect(bx, TASK_Y + 1, 150, TASK_H - 1);
+                    g.fillRect(bx, TASK_Y + 1, 128, TASK_H - 1);
                     g.setRGB(C_SEL);
-                    g.fillRect(bx, TASK_Y + 1, 150, 2);
+                    g.fillRect(bx, TASK_Y + 1, 128, 2);
                     g.setRGB(C_TEXTLT);
                 } else {
                     g.setRGB(C_MUTED);
                 }
-                g.drawString(winTitle(i), bx + 10, TASK_Y + (TASK_H - CH_H) / 2);
-                bx = bx + 156;
+                g.drawString(winTitle(i), bx + 8, TASK_Y + (TASK_H - CH_H) / 2);
+                bx = bx + 134;
             }
             i = i + 1;
         }
@@ -1310,6 +1315,8 @@ public class Boot {
             drawSystem(x, y, w, h);
         } else if (i == W_SOKOBAN) {
             drawSokoban(x, y, w, h);
+        } else if (i == W_WASM) {
+            drawWasm(x, y, w, h);
         } else {
             drawAbout(x, y, w, h);
         }
@@ -1440,6 +1447,21 @@ public class Boot {
         // SYS_KALLOC with size 0 returns the current bump pointer without
         // allocating; subtracting the heap base gives the bytes handed out.
         // 0xA00000 must match heap_start_ptr in boot/sys_api.asm.
+        if (h > 170) {
+            // Proves the freestanding C objects linked into the kernel and are
+            // reachable from the syscall dispatcher: the groundwork for the
+            // WASM sandbox, which will be written in C.
+            g.setRGB(C_TITLE_A);
+            g.drawString("C runtime", x, y + 148);
+            if (Native.sys(Native.SYS_C_SELFTEST, 0, 0, 0, 0) == 0x5741534D) {
+                g.setRGB(C_GREEN);
+                g.drawString("linked, callable", x + 88, y + 148);
+            } else {
+                g.setRGB(C_RED);
+                g.drawString("not available", x + 88, y + 148);
+            }
+        }
+
         label("Heap used:", x, y + 124);
         g.setRGB(C_TEXT);
         nx = g.drawInt(Native.sys(Native.SYS_KALLOC, 0, 0, 0, 0) - 0x00A00000, x + 88, y + 124);
@@ -1561,6 +1583,24 @@ public class Boot {
         if (hit(mouseX, mouseY, x + cw / 2 - 42, y + ch - 40, 84, 26)) {
             wOpen[W_ABOUT] = 0;
             clickTone();
+        }
+    }
+
+    // The frame is produced by a WebAssembly guest, not by this class. The
+    // guest is handed nothing but the size of its window: it draws in its own
+    // coordinates from 0,0, the host translates, and every memory access it
+    // makes is bounds checked against the one page it declared.
+    static void drawWasm(int x, int y, int w, int h) {
+        g.setRGB(C_TITLE_A);
+        g.drawString("WebAssembly guest", x, y);
+        g.setRGB(C_DARK);
+        g.drawString("sandboxed, bounds-checked memory", x, y + 18);
+
+        int r = Native.sys(Native.SYS_WASM_DRAW, x, y + 44, w, h - 44);
+        if (r < 0) {
+            g.setRGB(C_RED);
+            g.drawString("guest refused to run, code", x, y + 50);
+            g.drawInt(0 - r, x + 216, y + 50);
         }
     }
 

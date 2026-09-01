@@ -59,6 +59,8 @@ section .text
 	extern sys_rtl8139_init, sys_rtl8139_send_packet, sys_net_receive_packet
 	extern sys_inb, sys_outb, sys_inw, sys_outw, sys_indw, sys_outdw, sys_get_ticks
 	extern sys_get_time, sys_sleep, sys_exit
+	extern c_selftest
+	extern wasm_demo_draw
 
 jit_init:
     push eax
@@ -344,6 +346,10 @@ sys_native_dispatch:
     je .sys_str_byte
     cmp eax, 31
     je .sys_set_blend
+    cmp eax, 32
+    je .sys_c_selftest
+    cmp eax, 33
+    je .sys_wasm_draw
 
     xor eax, eax
     jmp .done
@@ -546,6 +552,19 @@ sys_native_dispatch:
     call sys_set_clip
     add esp, 16
     xor eax, eax
+    jmp .done
+
+.sys_wasm_draw:
+    push dword [sys_arg_d]      ; h
+    push dword [sys_arg_c]      ; w
+    push dword [sys_arg_b]      ; y
+    push dword [sys_arg_a]      ; x
+    call wasm_demo_draw         ; devuelve 1, o -error, en eax
+    add esp, 16
+    jmp .done
+
+.sys_c_selftest:
+    call c_selftest             ; C devuelve en eax, convencion cdecl
     jmp .done
 
 .sys_set_blend:
