@@ -53,12 +53,17 @@ A guest imports these from module `env`:
 | `width()`, `height()` | size of the window the guest was given |
 | `key()` | next pending key, or 0 |
 | `beep(hz, ms)` | a tone on the PC speaker, then silence |
+| `music(track)` | 0 stops, 1 the fanfare once, 2 the theme looped |
 
 Exports: `frame()`, called once per repaint, and `set_sound(on)`, which the
 desktop pushes in so the guest follows the "Sound enabled" setting.
 
 `beep` blocks for the length of the note, exactly as the Java side does: there
-is no scheduler to play it in the background. v86 emulates a Sound Blaster 16,
+is no scheduler to play it in the background. Music is different: the melodies
+are the note tables from the original game's `sound.rs`, and the sequencer runs
+in the host, ticked from the desktop's idle loop. It has to advance roughly
+every millisecond, and running the interpreter that often would cost far more
+than the music does; the guest only chooses a track. v86 emulates a Sound Blaster 16,
 so real sampled audio is possible, but the kernel only drives the PC speaker
 today.
 

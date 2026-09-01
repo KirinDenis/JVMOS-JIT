@@ -53,6 +53,8 @@ method up by name.
 | 33 | `SYS_WASM_DRAW` | a, b, c, d = x, y, w, h | 1, or a negated error code |
 | 34 | `SYS_WASM_KEY` | a = key code | |
 | 35 | `SYS_WASM_SOUND` | a = 1 on, 0 off | |
+| 36 | `SYS_WASM_MUSIC` | a = 1 audible, 0 silent | advances the sequencer one step |
+| 37 | `SYS_SB16_STATUS` | | 1 if a Sound Blaster answered the reset |
 
 The network calls target an RTL8139. That card is not emulated by v86, which
 provides an NE2000, so those three are dead code in a browser.

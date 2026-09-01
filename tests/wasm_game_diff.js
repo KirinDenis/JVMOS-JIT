@@ -40,7 +40,7 @@ const RUNS = [
 ];
 
 function reference(keys) {
-  let rects = 0, imgs = 0, beeps = 0, ints = [], pending = 0;
+  let rects = 0, imgs = 0, beeps = 0, track = 0, ints = [], pending = 0;
   const inst = new WebAssembly.Instance(new WebAssembly.Module(bin), {
     env: {
       set_color: () => {},
@@ -51,6 +51,7 @@ function reference(keys) {
       draw_int: (v) => { ints.push(v | 0); },
       draw_image: () => { imgs++; },
       beep: () => { beeps++; },
+      music: (t) => { track = t | 0; },
       key: () => { const k = pending; pending = 0; return k; },
     },
   });
@@ -63,7 +64,7 @@ function reference(keys) {
     ints = [];
     inst.exports.frame();
   }
-  return `RECTS ${rects} IMGS ${imgs} BEEPS ${beeps} INTS ${ints.join(" ")}`.trim();
+  return `RECTS ${rects} IMGS ${imgs} BEEPS ${beeps} TRACK ${track} INTS ${ints.join(" ")}`.trim();
 }
 
 let pass = 0, fail = 0;

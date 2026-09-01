@@ -25,6 +25,20 @@ extern void sys_fill_rect(int x, int y, int w, int h);
 extern void draw_char_vram(int ch, int x, int y, int color);
 extern void sys_beep(int hz);
 extern void sys_sleep(int ms);
+extern int sys_get_ticks(void);
+
+/* wasm/sb16.c */
+int sb16_init(void);
+int sb16_present(void);
+int sb16_effect(int id);
+
+/* clip ids, matching the enum in sb16.c */
+#define SND_STEP 0
+#define SND_PUSH 1
+#define SND_BUMP 2
+#define SND_WIN  3
+
+static int g_audio_ready;
 
 /* Framebuffer state, for blitting pictures without a syscall per pixel. */
 extern unsigned char *vram_back_buffer;
@@ -43,6 +57,65 @@ static int g_color = 0x00FFFFFF;
 
 static int g_keys[KEY_SLOTS];
 static int g_key_head, g_key_tail;
+
+/*
+ * Music.
+ *
+ * The melodies are the ones from the original game's sound.rs, which stores
+ * them as notes rather than as samples, so they can be played on the PC
+ * speaker unchanged.
+ *
+ * The sequencer lives here rather than in the guest because it has to be
+ * advanced roughly every millisecond, and running the interpreter that often
+ * would cost far more than the music. The guest only says which track to play;
+ * the desktop's idle loop ticks this, and each tick is a comparison against the
+ * system clock. Nothing sleeps, so nothing blocks the machine.
+ */
+#define MUSIC_GAP 40
+
+static const short fanfare_hz[]  = { 392, 494, 587, 784, 698, 659 };
+static const short fanfare_ms[]  = { 250, 250, 250, 250, 250, 250 };
+
+static const short theme_hz[]    = { 262, 330, 392, 440, 349, 294, 262, 330, 392, 523, 392 };
+static const short theme_ms[]    = { 150, 150, 200, 150, 150, 200, 150, 200, 250, 200, 300 };
+
+static int g_track;              /* 0 none, 1 fanfare once, 2 theme looped */
+static int g_note, g_resting, g_note_at, g_sounding;
+static int g_sound_on = 1;
+
+static void music_silence(void)
+{
+    if (g_sounding) {
+        sys_beep(0);
+        g_sounding = 0;
+    }
+}
+
+static void music_select(int track)
+{
+    music_silence();
+    g_track = track;
+    g_note = 0;
+    g_resting = 0;
+    g_note_at = sys_get_ticks();
+}
+
+static int hf_music(int *a, int n, void *user)
+{
+    (void)user;
+    if (n < 1) return 0;
+
+    if (!g_audio_ready) {
+        g_audio_ready = 1;
+        sb16_init();
+    }
+
+    /* the level fanfare is a sampled clip when the card is there */
+    if (a[0] == 1 && sb16_present() && sb16_effect(SND_WIN)) return 0;
+
+    music_select(a[0]);
+    return 0;
+}
 
 static int hf_set_color(int *a, int n, void *user)
 {
@@ -164,13 +237,36 @@ static int hf_height(int *a, int n, void *user) { (void)a; (void)n; (void)user; 
 
 /* PC speaker. This blocks for the duration of the note, exactly as the Java
    side does: there is no scheduler to play it in the background. */
+/*
+ * An effect. With a Sound Blaster present these become sampled clips, which do
+ * not block; without one they fall back to the speaker, which does. The guest
+ * asks for a pitch either way and never learns which happened.
+ */
 static int hf_beep(int *a, int n, void *user)
 {
+    int hz;
     (void)user;
     if (n < 2) return 0;
-    sys_beep(a[0]);
+    hz = a[0];
+
+    if (!g_audio_ready) {
+        g_audio_ready = 1;
+        sb16_init();
+    }
+
+    if (sb16_present()) {
+        int clip = SND_STEP;
+        if (hz < 200) clip = SND_BUMP;
+        else if (hz < 700) clip = SND_PUSH;
+        if (sb16_effect(clip)) return 0;
+        return 0;
+    }
+
+    sys_beep(hz);
     sys_sleep(a[1]);
     sys_beep(0);
+    g_sounding = 0;
+    g_note_at = sys_get_ticks() + MUSIC_GAP;   /* let the effect breathe */
     return 0;
 }
 
@@ -192,12 +288,62 @@ static const wasm_host_entry g_hosts[] = {
     { "env", "width",     hf_width     },
     { "env", "height",    hf_height    },
     { "env", "key",       hf_key       },
-    { "env", "beep",      hf_beep      }
+    { "env", "beep",      hf_beep      },
+    { "env", "music",     hf_music     }
 };
+
+/*
+ * Called from the desktop's idle loop. `enabled` is false when the guest's
+ * window is closed or minimised, which is how the music stops without the
+ * guest having to know anything about windows.
+ */
+void wasm_music_tick(int enabled)
+{
+    const short *hz;
+    const short *ms;
+    int len, now;
+
+    if (!enabled || !g_sound_on || g_track == 0) {
+        music_silence();
+        return;
+    }
+
+    if (g_track == 1) {
+        hz = fanfare_hz; ms = fanfare_ms; len = 6;
+    } else {
+        hz = theme_hz;   ms = theme_ms;   len = 11;
+    }
+
+    now = sys_get_ticks();
+    if (now - g_note_at < 0) g_note_at = now;      /* clock wrapped */
+    if (now < g_note_at) return;
+
+    if (g_resting) {
+        music_silence();
+        g_note_at = now + MUSIC_GAP;
+        g_resting = 0;
+        g_note++;
+        if (g_note >= len) {
+            g_note = 0;
+            if (g_track == 1) {                    /* the fanfare plays once */
+                g_track = 0;
+                music_silence();
+            }
+        }
+        return;
+    }
+
+    sys_beep(hz[g_note]);
+    g_sounding = 1;
+    g_note_at = now + ms[g_note] - MUSIC_GAP;
+    g_resting = 1;
+}
 
 /* The desktop owns the sound setting, so it is pushed into the guest. */
 void wasm_set_sound(int on)
 {
+    g_sound_on = on ? 1 : 0;
+    if (!g_sound_on) music_silence();
     int args[1];
     if (!g_loaded || g_failed) return;
     args[0] = on;

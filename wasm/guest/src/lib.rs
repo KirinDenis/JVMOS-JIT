@@ -35,6 +35,9 @@ extern "C" {
     fn key() -> i32;
     /// PC speaker: a tone of the given pitch for the given time, then silence.
     fn beep(hz: i32, ms: i32);
+    /// Background music: 0 stops, 1 the level fanfare, 2 the theme on a loop.
+    /// The host sequences it; this call only chooses the track.
+    fn music(track: i32);
 }
 
 // Key codes agreed with the host, deliberately small and explicit rather than
@@ -248,10 +251,8 @@ unsafe fn step(dx: i32, dy: i32) {
     HERO_Y = ny;
     MOVES += 1;
     count_goals();
-    if SOLVED == 1 {
-        tone(784, 110);
-        tone(988, 110);
-        tone(1319, 300);
+    if SOLVED == 1 && SOUND == 1 {
+        music(MUSIC_FANFARE);
     }
 }
 
@@ -267,6 +268,10 @@ unsafe fn go(delta: i32) {
     load(n);
 }
 
+const MUSIC_OFF: i32 = 0;
+const MUSIC_FANFARE: i32 = 1;
+const MUSIC_THEME: i32 = 2;
+
 unsafe fn handle_art(k: i32) {
     if k == K_NEXT || k == K_RIGHT {
         IMAGE += 1;
@@ -280,12 +285,14 @@ unsafe fn handle_art(k: i32) {
         }
     } else {
         SCREEN = SCREEN_GAME;
+        music(MUSIC_OFF);
     }
 }
 
 unsafe fn handle(k: i32) {
     if k == K_GALLERY {
         SCREEN = SCREEN_ART;
+        music(MUSIC_THEME);
         return;
     }
     if k == K_UP {
@@ -414,6 +421,7 @@ pub extern "C" fn frame() {
         if STARTED == 0 {
             STARTED = 1;
             load(LEVEL);
+            music(MUSIC_THEME);   // the theme plays over the title, as the original does
         }
 
         let mut k = key();

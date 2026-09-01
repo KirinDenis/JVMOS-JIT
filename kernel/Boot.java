@@ -360,6 +360,15 @@ public class Boot {
             prevX = mouseX;
             prevY = mouseY;
             prevBtn = mouseBtn;
+
+            // The sequencer needs advancing far more often than the screen is
+            // repainted, so it is ticked here, where a tick is one comparison
+            // against the clock. It falls silent on its own when the guest's
+            // window is closed or minimised.
+            int audible = 0;
+            if (wOpen[W_WASM] == 1 && wMin[W_WASM] == 0) audible = 1;
+            Native.sys(Native.SYS_WASM_MUSIC, audible, 0, 0, 0);
+
             Native.sys(Native.SYS_SLEEP, 1, 0, 0, 0);
         }
     }
@@ -1457,6 +1466,20 @@ public class Boot {
             } else {
                 g.setRGB(C_RED);
                 g.drawString("not available", x + 88, y + 148);
+            }
+        }
+
+        if (h > 194) {
+            // The card is probed the first time a sound is asked for, so this
+            // reads "not probed yet" until the guest has made a noise.
+            g.setRGB(C_TITLE_A);
+            g.drawString("Audio", x, y + 172);
+            if (Native.sys(Native.SYS_SB16_STATUS, 0, 0, 0, 0) == 1) {
+                g.setRGB(C_GREEN);
+                g.drawString("Sound Blaster 16", x + 88, y + 172);
+            } else {
+                g.setRGB(C_AMBER);
+                g.drawString("PC speaker", x + 88, y + 172);
             }
         }
 

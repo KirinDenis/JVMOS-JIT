@@ -73,6 +73,28 @@ once a frame, which is what removes the flicker.
   like Alt+F4 reach the desktop, which otherwise only ever saw plain ASCII.
 * IRQ12 assembles the three byte PS/2 mouse packet and keeps x, y and buttons.
 
+# Audio
+Two paths, chosen at runtime.
+
+* **PC speaker.** PIT channel 2, one square wave at a time. Music lives here:
+  the melodies are the note tables from the original Rust game, sequenced by
+  the host and ticked from the desktop's idle loop, so nothing sleeps and the
+  machine stays responsive while music plays.
+* **Sound Blaster 16.** Probed the first time a sound is requested: reset the
+  DSP at port 0x226 and expect 0xAA back. Effects then become 8-bit PCM clips
+  played through DMA channel 1, which do not block at all.
+
+The clips are synthesised into the DMA buffer at boot from a sine table and a
+linear envelope, so no samples are stored anywhere. The buffer is at a fixed
+`0x00F00000`: the 8237 addresses memory as an offset inside a 64KB page, so it
+must be below 16MB and must not straddle a page boundary.
+
+Completion is not waited for. The card raises IRQ5, which the PIC masks, so the
+driver tracks the end of a clip against the system clock instead.
+
+System Info reports which path is in use, which is the only way to tell without
+listening.
+
 # The desktop
 `kernel/Boot.java` is the whole user interface: window management, the widget
 set, the taskbar, both games. It is one class on purpose, for reasons explained

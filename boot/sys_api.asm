@@ -1809,6 +1809,7 @@ sys_inb:
     mov ebp, esp
     mov dx, [ebp + 8]
     in al, dx
+    movzx eax, al               ; limpiar los bits altos: C y Java leen el eax entero
     pop ebp
     ret
 sys_outb:
@@ -1824,6 +1825,7 @@ sys_inw:
     mov ebp, esp
     mov dx, [ebp + 8]
     in ax, dx
+    movzx eax, ax
     pop ebp
     ret
 sys_outw:

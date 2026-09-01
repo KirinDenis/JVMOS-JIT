@@ -25,6 +25,7 @@ static wasm_module g_mod;          /* ~14KB, kept off the stack */
 static int g_rects;
 static int g_imgs;
 static int g_beeps;
+static int g_track;
 static int g_ints[32];
 static int g_nints;
 static int g_pending_key;
@@ -39,6 +40,7 @@ static int host_height(int *a, int n, void *u) { (void)a; (void)n; (void)u; retu
 static int host_ticks(int *a, int n, void *u)  { (void)a; (void)n; (void)u; return 1000; }
 static int host_draw_image(int *a, int n, void *u) { (void)a; (void)n; (void)u; g_imgs++; return 0; }
 static int host_beep(int *a, int n, void *u) { (void)a; (void)n; (void)u; g_beeps++; return 0; }
+static int host_music(int *a, int n, void *u) { (void)u; if (n >= 1) g_track = a[0]; return 0; }
 
 /* The guest reports its state through draw_int, so capturing those calls is
    enough to observe the game without any other instrumentation. */
@@ -69,6 +71,7 @@ static const wasm_host_entry g_hosts[] = {
     { "env", "draw_int",  host_draw_int  },
     { "env", "draw_image", host_draw_image },
     { "env", "beep",      host_beep      },
+    { "env", "music",     host_music     },
     { "env", "key",       host_key       }
 };
 
@@ -105,7 +108,7 @@ static int run_game(int argc, char **argv)
         if (e != WASM_OK) { printf("ERR %s\n", wasm_strerror(e)); return 1; }
     }
 
-    printf("RECTS %d IMGS %d BEEPS %d INTS", g_rects, g_imgs, g_beeps);
+    printf("RECTS %d IMGS %d BEEPS %d TRACK %d INTS", g_rects, g_imgs, g_beeps, g_track);
     for (i = 0; i < g_nints; i++) printf(" %d", g_ints[i]);
     printf("\n");
     return 0;
