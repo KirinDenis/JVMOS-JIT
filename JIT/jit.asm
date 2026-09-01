@@ -53,7 +53,7 @@ section .text
 	extern draw_char_vram, sys_draw_string, sys_serial_puts, sys_serial_putc, sys_serial_print_java
 	extern current_color
 	extern sys_read_keyboard_scancode, sys_set_keyboard_layout, sys_read_mouse
-	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel, sys_present, sys_set_clip, sys_fill_blend
+	extern sys_draw_rect, sys_fill_rect, sys_draw_line, sys_get_pixel, sys_draw_pixel, sys_present, sys_set_clip, sys_fill_blend, sys_str_len, sys_str_byte
 	extern sys_beep, sys_nosound, sys_get_free_mem, sys_get_ram_size
 	extern sys_pci_read_config, sys_disk_read_sector, sys_disk_write_sector
 	extern sys_rtl8139_init, sys_rtl8139_send_packet, sys_net_receive_packet
@@ -338,6 +338,10 @@ sys_native_dispatch:
     je .sys_set_clip
     cmp eax, 28
     je .sys_fill_blend
+    cmp eax, 29
+    je .sys_str_len
+    cmp eax, 30
+    je .sys_str_byte
 
     xor eax, eax
     jmp .done
@@ -540,6 +544,19 @@ sys_native_dispatch:
     call sys_set_clip
     add esp, 16
     xor eax, eax
+    jmp .done
+
+.sys_str_len:
+    push dword [sys_arg_c]
+    call sys_str_len
+    add esp, 4
+    jmp .done
+
+.sys_str_byte:
+    push dword [sys_arg_a]      ; indice
+    push dword [sys_arg_c]      ; puntero al literal
+    call sys_str_byte
+    add esp, 8
     jmp .done
 
 .sys_fill_blend:

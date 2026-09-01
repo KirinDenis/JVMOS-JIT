@@ -87,11 +87,18 @@ public class Boot {
     static final int C_AMBER = 0x00E0A000;
 
     // ---- window ids ------------------------------------------------------
-    static final int WIN_COUNT = 4;
+    static final int WIN_COUNT = 5;
     static final int W_GALLERY = 0;
     static final int W_FILES = 1;
     static final int W_SYSTEM = 2;
     static final int W_ABOUT = 3;
+    static final int W_SOKOBAN = 4;
+
+    // ---- sokoban ---------------------------------------------------------
+    static final int SOKO_LEVELS = 61;
+    static final int SOKO_STRIDE = 32;   // cells per row in the flat grids
+    static final int SOKO_ROWS = 24;
+    static final int SOKO_CELLS = SOKO_STRIDE * SOKO_ROWS;
 
     // ---- drag modes ------------------------------------------------------
     static final int DRAG_NONE = 0;
@@ -151,6 +158,13 @@ public class Boot {
     static int lastKey;
     static int[] focus;                 // focused control per window
 
+    // sokoban state (flat grids, SOKO_STRIDE cells per row)
+    static int[] sokoWall, sokoGoal, sokoBox;
+    static int sokoW, sokoH;            // level bounding box
+    static int sokoPX, sokoPY;          // player cell
+    static int sokoLevel, sokoMoves, sokoPushes;
+    static int sokoTotal, sokoOn, sokoDone;
+
     // ======================================================================
     // ENTRY POINT
     // ======================================================================
@@ -184,21 +198,27 @@ public class Boot {
         zorder = new int[WIN_COUNT];
         focus = new int[WIN_COUNT];
         fieldBuf = new int[24];
+        sokoWall = new int[SOKO_CELLS];
+        sokoGoal = new int[SOKO_CELLS];
+        sokoBox = new int[SOKO_CELLS];
 
         setWin(W_GALLERY, 60, 60, 520, 430);
         setWin(W_FILES, 600, 90, 380, 330);
         setWin(W_SYSTEM, 150, 430, 430, 250);
         setWin(W_ABOUT, 300, 220, 420, 220);
+        setWin(W_SOKOBAN, 430, 120, 540, 520);
 
         wOpen[W_GALLERY] = 1;
         wOpen[W_FILES] = 1;
         wOpen[W_SYSTEM] = 1;
         wOpen[W_ABOUT] = 0;
+        wOpen[W_SOKOBAN] = 1;
 
         zorder[0] = W_SYSTEM;
-        zorder[1] = W_FILES;
-        zorder[2] = W_ABOUT;
-        zorder[3] = W_GALLERY;
+        zorder[1] = W_GALLERY;
+        zorder[2] = W_FILES;
+        zorder[3] = W_ABOUT;
+        zorder[4] = W_SOKOBAN;
 
         mouseX = 512;
         mouseY = 384;
@@ -222,6 +242,9 @@ public class Boot {
         fileSel = 0;
         fieldFocus = 0;
         fieldLen = 0;
+
+        sokoLevel = 0;
+        sokoLoad(0);
     }
 
     static void setWin(int i, int x, int y, int w, int h) {
@@ -362,6 +385,11 @@ public class Boot {
 
         if (menuOpen >= 0) {
             menuKey(code);
+            return;
+        }
+
+        if (top == W_SOKOBAN && wMin[top] == 0 && code != K_TAB) {
+            sokoKey(code);
             return;
         }
 
@@ -897,6 +925,7 @@ public class Boot {
         if (i == W_GALLERY) return "Widget Gallery";
         if (i == W_FILES) return "File Manager";
         if (i == W_SYSTEM) return "System Info";
+        if (i == W_SOKOBAN) return "Sokoban";
         return "About JVMOS";
     }
 
@@ -1184,6 +1213,8 @@ public class Boot {
             drawFiles(x, y, w, h);
         } else if (i == W_SYSTEM) {
             drawSystem(x, y, w, h);
+        } else if (i == W_SOKOBAN) {
+            drawSokoban(x, y, w, h);
         } else {
             drawAbout(x, y, w, h);
         }
@@ -1436,6 +1467,319 @@ public class Boot {
             wOpen[W_ABOUT] = 0;
             clickTone();
         }
+    }
+
+    // ======================================================================
+    // SOKOBAN
+    // Levels come from the Base-Z-47 Rust game, trimmed to their bounding box.
+    // They are stored as string literals and read back through the string
+    // syscalls, because Java here cannot index into a constant-pool literal.
+    // Legend: '#' wall, '.' goal, '$' box, '@' player, ' ' floor.
+    // ======================================================================
+    static void sokoLoad(int n) {
+        int i = 0;
+        while (i < SOKO_CELLS) {
+            sokoWall[i] = 0;
+            sokoGoal[i] = 0;
+            sokoBox[i] = 0;
+            i = i + 1;
+        }
+        sokoW = 0;
+        sokoH = 0;
+        sokoTotal = 0;
+        sokoPX = 0;
+        sokoPY = 0;
+
+        String s = levelData(n);
+        int len = Native.sys(Native.SYS_STR_LEN, 0, 0, s, 0);
+        int col = 0;
+        int row = 0;
+        i = 0;
+        while (i < len) {
+            int ch = Native.sys(Native.SYS_STR_BYTE, i, 0, s, 0);
+            if (ch == 10) {
+                row = row + 1;
+                col = 0;
+            } else {
+                if (row < SOKO_ROWS && col < SOKO_STRIDE) {
+                    sokoCell(row * SOKO_STRIDE + col, ch, col, row);
+                }
+                col = col + 1;
+                if (col > sokoW) sokoW = col;
+                if (row + 1 > sokoH) sokoH = row + 1;
+            }
+            i = i + 1;
+        }
+
+        sokoMoves = 0;
+        sokoPushes = 0;
+        sokoDone = 0;
+        sokoCount();
+    }
+
+    static void sokoCell(int p, int ch, int col, int row) {
+        if (ch == 35) {
+            sokoWall[p] = 1;                    // #
+        } else if (ch == 46) {
+            sokoGoal[p] = 1;                    // .
+        } else if (ch == 36) {
+            sokoBox[p] = 1;                     // $
+            sokoTotal = sokoTotal + 1;
+        } else if (ch == 64) {
+            sokoPX = col;                       // @
+            sokoPY = row;
+        }
+    }
+
+    static void sokoCount() {
+        int on = 0;
+        int i = 0;
+        while (i < SOKO_CELLS) {
+            if (sokoBox[i] == 1 && sokoGoal[i] == 1) on = on + 1;
+            i = i + 1;
+        }
+        sokoOn = on;
+        if (sokoTotal > 0 && on == sokoTotal) sokoDone = 1; else sokoDone = 0;
+    }
+
+    static void sokoMove(int dx, int dy) {
+        if (sokoDone == 1) return;
+        int nx = sokoPX + dx;
+        int ny = sokoPY + dy;
+        if (nx < 0 || ny < 0 || nx >= SOKO_STRIDE || ny >= SOKO_ROWS) return;
+
+        int p = ny * SOKO_STRIDE + nx;
+        if (sokoWall[p] == 1) {
+            sokoBlip(160, 55);
+            return;
+        }
+
+        if (sokoBox[p] == 1) {
+            int bx = nx + dx;
+            int by = ny + dy;
+            if (bx < 0 || by < 0 || bx >= SOKO_STRIDE || by >= SOKO_ROWS) {
+                sokoBlip(160, 55);
+                return;
+            }
+            int q = by * SOKO_STRIDE + bx;
+            if (sokoWall[q] == 1 || sokoBox[q] == 1) {
+                sokoBlip(160, 55);
+                return;
+            }
+            sokoBox[p] = 0;
+            sokoBox[q] = 1;
+            sokoPushes = sokoPushes + 1;
+            sokoBlip(520, 34);
+        } else {
+            sokoBlip(1500, 9);
+        }
+
+        sokoPX = nx;
+        sokoPY = ny;
+        sokoMoves = sokoMoves + 1;
+        sokoCount();
+        if (sokoDone == 1) sokoFanfare();
+    }
+
+    static void sokoBlip(int hz, int ms) {
+        if (chkSound == 0) return;
+        Native.sys(Native.SYS_BEEP, hz, 0, 0, 0);
+        Native.sys(Native.SYS_SLEEP, ms, 0, 0, 0);
+        Native.sys(Native.SYS_BEEP, 0, 0, 0, 0);
+    }
+
+    static void sokoFanfare() {
+        if (chkSound == 0) return;
+        note(784, 110);
+        note(988, 110);
+        note(1319, 300);
+    }
+
+    static void sokoKey(int code) {
+        if (code == K_UP) sokoMove(0, -1);
+        else if (code == K_DOWN) sokoMove(0, 1);
+        else if (code == K_LEFT) sokoMove(-1, 0);
+        else if (code == K_RIGHT) sokoMove(1, 0);
+        else if (code == 114) sokoLoad(sokoLevel);                  // R
+        else if (code == 110) sokoGo(1);                            // N
+        else if (code == 112) sokoGo(-1);                           // P
+        paint();
+    }
+
+    static void sokoGo(int dir) {
+        int n = sokoLevel + dir;
+        if (n < 0) n = 0;
+        if (n >= SOKO_LEVELS) n = SOKO_LEVELS - 1;
+        sokoLevel = n;
+        sokoLoad(n);
+    }
+
+    static void drawSokoban(int x, int y, int w, int h) {
+        g.setRGB(C_TITLE_A);
+        g.drawString("Level", x, y);
+        g.setRGB(C_TEXT);
+        int nx = g.drawInt(sokoLevel + 1, x + 48, y);
+        g.drawString("/61", nx, y);
+
+        g.setRGB(C_TITLE_A);
+        g.drawString("Moves", x + 136, y);
+        g.setRGB(C_TEXT);
+        g.drawInt(sokoMoves, x + 192, y);
+
+        g.setRGB(C_TITLE_A);
+        g.drawString("Pushes", x + 256, y);
+        g.setRGB(C_TEXT);
+        g.drawInt(sokoPushes, x + 320, y);
+
+        g.setRGB(C_TITLE_A);
+        g.drawString("Done", x + 392, y);
+        g.setRGB(C_TEXT);
+        nx = g.drawInt(sokoOn, x + 440, y);
+        g.drawString("/", nx, y);
+        g.drawInt(sokoTotal, nx + 8, y);
+
+        if (sokoDone == 1) {
+            g.setRGB(C_GREEN);
+            g.drawString("SOLVED!  press N for the next level", x, y + 18);
+        } else {
+            g.setRGB(C_DARK);
+            g.drawString("Arrows move   R restart   N next   P previous", x, y + 18);
+        }
+
+        if (sokoW == 0 || sokoH == 0) return;
+        int ts = (w - 4) / sokoW;
+        int t2 = (h - 44) / sokoH;
+        if (t2 < ts) ts = t2;
+        if (ts > 26) ts = 26;
+        if (ts < 5) ts = 5;
+        drawSokoGrid(x + (w - sokoW * ts) / 2, y + 42, ts);
+    }
+
+    static void drawSokoGrid(int ox, int oy, int ts) {
+        int r = 0;
+        while (r < sokoH) {
+            int c = 0;
+            while (c < sokoW) {
+                int p = r * SOKO_STRIDE + c;
+                int px = ox + c * ts;
+                int py = oy + r * ts;
+                if (sokoWall[p] == 1) {
+                    g.setRGB(0x00806040);
+                    g.fillRect(px, py, ts, ts);
+                    g.setRGB(0x00A88860);
+                    g.fillRect(px, py, ts - 1, 1);
+                    g.fillRect(px, py, 1, ts - 1);
+                    g.setRGB(0x00503820);
+                    g.fillRect(px, py + ts - 1, ts, 1);
+                    g.fillRect(px + ts - 1, py, 1, ts);
+                } else {
+                    g.setRGB(0x00202830);
+                    g.fillRect(px, py, ts, ts);
+                    if (sokoGoal[p] == 1) {
+                        g.setRGB(0x00C05050);
+                        g.fillRect(px + ts / 2 - 2, py + ts / 2 - 2, 5, 5);
+                    }
+                }
+                if (sokoBox[p] == 1) drawCrate(px, py, ts, sokoGoal[p]);
+                c = c + 1;
+            }
+            r = r + 1;
+        }
+        drawHero(ox + sokoPX * ts, oy + sokoPY * ts, ts);
+    }
+
+    static void drawCrate(int px, int py, int ts, int onGoal) {
+        int face = 0x00B08838;
+        if (onGoal == 1) face = 0x0058B058;
+        g.setRGB(face);
+        g.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+        g.setRGB(0x00402808);
+        g.fillRect(px + 1, py + 1, ts - 2, 1);
+        g.fillRect(px + 1, py + ts - 2, ts - 2, 1);
+        g.fillRect(px + 1, py + 1, 1, ts - 2);
+        g.fillRect(px + ts - 2, py + 1, 1, ts - 2);
+        if (ts >= 12) {
+            g.fillRect(px + 3, py + ts / 2 - 1, ts - 6, 2);
+            g.fillRect(px + ts / 2 - 1, py + 3, 2, ts - 6);
+        }
+    }
+
+    static void drawHero(int px, int py, int ts) {
+        int cx = px + ts / 2;
+        g.setRGB(0x00FFD070);
+        g.fillRect(cx - 3, py + 2, 6, 5);
+        if (ts >= 10) {
+            g.setRGB(0x002C6CC0);
+            g.fillRect(cx - 4, py + 7, 8, ts - 10);
+            g.setRGB(0x00203040);
+            g.fillRect(cx - 4, py + ts - 3, 3, 2);
+            g.fillRect(cx + 1, py + ts - 3, 3, 2);
+        }
+    }
+
+    static String levelData(int n) {
+        if (n == 0) return "    #####           \n    #   #           \n    #$  #           \n  ###  $##          \n  #  $ $ #          \n### # ## #    ######\n#   # ## ######  ..#\n# $  $           ..#\n##### ### #@###  ..#\n    #     ### ######\n    #######         ";
+        if (n == 1) return "    #####             \n    #   #             \n    #$  #             \n  ###  $###           \n  #  $  $ #           \n### # ### #     ######\n#   # ### #######  ..#\n# $  $             ..#\n##### #### #@####  ..#\n    #      ###  ######\n    ########          ";
+        if (n == 2) return "############  \n#..  #     ###\n#..  # $  $  #\n#..  #$####  #\n#..    @ ##  #\n#..  # #  $ ##\n###### ##$ $ #\n  # $  $ $ $ #\n  #    #     #\n  ############";
+        if (n == 3) return "        ######## \n        #     @# \n        # $#$ ## \n        # $  $#  \n        ##$ $ #  \n######### $ # ###\n#....  ## $  $  #\n##...    $  $   #\n#....  ##########\n########         ";
+        if (n == 4) return "              ########\n              #  ....#\n   ############  ....#\n   #    #  $ $   ....#\n   # $$$#$  $ #  ....#\n   #  $     $ #  ....#\n   # $$ #$ $ $########\n####  $ #     #       \n#   # #########       \n#    $  ##            \n# $$#$$ @#            \n#   #   ##            \n#########             ";
+        if (n == 5) return "        #####    \n        #   #####\n        # #$##  #\n        #     $ #\n######### ###   #\n#....  ## $  $###\n#....    $ $$ ## \n#....  ##$  $ @# \n#########  $  ## \n        # $ $  # \n        ### ## # \n          #    # \n          ###### ";
+        if (n == 6) return "######  ### \n#..  # ##@##\n#..  ###   #\n#..     $$ #\n#..  # # $ #\n#..### # $ #\n#### $ #$  #\n   #  $# $ #\n   # $  $  #\n   #  ##   #\n   #########";
+        if (n == 7) return "       ##### \n #######   ##\n## # @## $$ #\n#    $      #\n#  $  ###   #\n### #####$###\n# $  ### ..# \n# $ $ $ ...# \n#    ###...# \n# $$ # #...# \n#  ### ##### \n####         ";
+        if (n == 8) return "  ####          \n  #  ###########\n  #    $   $ $ #\n  # $# $ #  $  #\n  #  $ $  #    #\n### $# #  #### #\n#@#$ $ $  ##   #\n#    $ #$#   # #\n##  $    $ $ $ #\n ####  #########\n  ###  ###      \n  #      #      \n  #      #      \n  #......#      \n  #......#      \n  #......#      \n  ########      ";
+        if (n == 9) return "          #######\n          #  ...#\n      #####  ...#\n      #      ...#\n      #  ##  ...#\n      ## ##  ...#\n     ### ########\n     # $$$ ##    \n #####  $ $ #####\n##   #$ $   #   #\n#@ $  $    $  $ #\n###### $$ $ #####\n     # $    #    \n     #### ###    \n        #  #     \n        #  #     \n        #  #     \n        ####     ";
+        if (n == 10) return "              ####   \n         ######  #   \n         #       #   \n         #  #### ### \n ###  ##### ###    # \n##@####   $$$ #    # \n# $$   $$ $   #....##\n#  $$$#    $  #.....#\n# $   # $$ $$ #.....#\n###   #  $    #.....#\n  #   # $ $ $ #.....#\n  # ####### ###.....#\n  #   #  $ $  #.....#\n  ### # $$ $ $#######\n    # #  $      #    \n    # # $$$ $$$ #    \n    # #       # #    \n    # ######### #    \n    #           #    \n    #############    ";
+        if (n == 11) return "          ####     \n     #### #  #     \n   ###  ###$ #     \n  ##   @  $  #     \n ##  $ $$## ##     \n #  #$##     #     \n # # $ $$ # ###    \n #   $ #  # $ #####\n####    #  $$ #   #\n#### ## $         #\n#.    ###  ########\n#.. ..# ####       \n#...#.#            \n#.....#            \n#######            ";
+        if (n == 12) return "  #########  \n  # . # . #  \n  #. . . .#  \n  # . . . #  \n  #. . . .#  \n  # . . . #  \n  ###   ###  \n    #   #    \n###### ######\n#           #\n# $ $ $ $ $ #\n## $ $ $ $ ##\n #$ $ $ $ $# \n #   $@$   # \n #  #####  # \n ####   #### ";
+        if (n == 13) return "    #########       \n  ###   ##  #####   \n###      #  #   ####\n#  $$ #$ #  #  ... #\n# #  $#@$## # #.#. #\n#  ## #$  #    ... #\n# $#    $ # # #.#. #\n#    ##  ##$ $ ... #\n# $ ##   #  #$#.#. #\n## $$  $   $  $... #\n #$  ######    ##  #\n #   #    ##########\n #####              ";
+        if (n == 14) return "################ \n#              # \n# # ######     # \n# #  $ $ $ $#  # \n# #   $@$   ## ##\n# # #$ $ $###...#\n# #   $ $  ##...#\n# ###$$$ $ ##...#\n#     # ## ##...#\n#####   ## ##...#\n    #####     ###\n        #     #  \n        #######  ";
+        if (n == 15) return "       ####      \n    ####  #      \n   ##  #  #      \n   #  $ $ #      \n ### #$   ####   \n #  $  ##$   #   \n #  # @ $ # $#   \n #  #      $ ####\n ## ####$##     #\n # $#.....# #   #\n #  $... . $# ###\n##  #.....#   #  \n#   ### #######  \n# $$  #  #       \n#  #     #       \n######   #       \n     #####       ";
+        if (n == 16) return "#####         \n#   ##        \n#    #  ####  \n# $  ####  #  \n#  $$ $   $#  \n###@ #$    ## \n #  ##  $ $ ##\n # $  ## ## .#\n #  #$##$  #.#\n ###   $..##.#\n  #    #. ...#\n  # $$ #.....#\n  #  #########\n  #  #        \n  ####        ";
+        if (n == 17) return "       #######    \n #######     #    \n #     # $@$ #    \n #$$ #   #########\n # ###......##   #\n #   $......## # #\n # ###......     #\n##   #### ### #$##\n#  #$   #  $  # # \n#  $ $$$  # $## # \n#   $ $ ###$$ # # \n#####     $   # # \n    ### ###   # # \n      #     #   # \n      ########  # \n             #### ";
+        if (n == 18) return "      ############    \n      #  .  ##   #    \n      # #.     @ #    \n ###### ##...# ####   \n##  ##...####     ####\n# $ ##...    $ #  $  #\n#     .. ## # ## ##  #\n####$###$# $  #   # ##\n ###  #    ##$ $$ # # \n #   $$ # # $ # $## # \n #                  # \n #################  # \n                 #### ";
+        if (n == 19) return "        ######              \n        #   @####           \n      ##### $   #           \n      #   ##    ####        \n      # $##  ##    #        \n      #   #  ##### #        \n      # #$$ $    # #        \n      #  $ $ ### # #        \n      # #   $  # # #        \n      # #  #$#   # #        \n     ## ####   # # #        \n     #  $  ##### # # ####   \n    ##    $     $  ###  ####\n#####  ### $ $# $ #   .....#\n#     ##      #  ##  #.....#\n# $$$$    ######$##   #.##.#\n##    ##              #....#\n ##  ###############   ....#\n  #  #             #####  ##\n  ####                 #### ";
+        if (n == 20) return "       ############ \n       #..........# \n     ###.#.#.#.#..# \n     #   .........# \n     #@ $ $ $  . .# \n    ####### ####### \n ####   #    ##  #  \n##    $ #    # $ ## \n#  #$# ### ###$   ##\n# $  $ $   # $ $ $ #\n#  # $ ##       #$ #\n#   $####$####$##  #\n####  ##   #    #  #\n   #$ ##   # # $$  #\n   #   # $ #  $    #\n   ### # $$ #  $ ###\n     # #    # $ ##  \n     # ######## #   \n     #          #   \n     ############   ";
+        if (n == 21) return "   ##########   \n   #..  #   #   \n   #..      #   \n   #..  #  #### \n  #######  #  ##\n  #            #\n  #  #  ##  #  #\n#### ##  #### ##\n#  $  ##### #  #\n# # $  $  # $  #\n# @$  $   #   ##\n#### ## ####### \n   #    #       \n   ######       ";
+        if (n == 22) return "            ####      \n ############  #####  \n #    #  #  $  #   ## \n # $ $ $  $ # $ $   # \n ##$ $   # @# $   $ # \n###   ############ ## \n#  $ $#  #......# $#  \n# #   #  #......## #  \n#  ## ## # .....#  #  \n# #      $...... $ #  \n# # $ ## #......#  #  \n#  $ $#  #......# $#  \n# $   #  ##$#####  #  \n# $ $ #### $ $  $ $#  \n## #     $ $ $ $   ###\n #  ###### $    $    #\n #         # ####### #\n ####### #$          #\n       #   ###########\n       #####          ";
+        if (n == 23) return "       #######           \n       #  #  ####        \n       # $#$ #  ##       \n########  #  #   ########\n#....  # $#$ #  $#  #   #\n#....# #     #$  #      #\n#..#.    $#  # $    #$  #\n#... @##  #$ #$  #  #   #\n#.... ## $#     $########\n########  #$$#$  #       \n       # $#  #  $#       \n       #  #  #   #       \n       ####  #####       \n          ####           ";
+        if (n == 24) return "   ##########        \n   #........####     \n   #.#.#....#  #     \n   #........$$ #     \n   #     .###  ####  \n #########  $ #   #  \n #     $   $ $  $ #  \n #  #    #  $ $#  #  \n ## #####   #  #  #  \n # $     #   #### #  \n##  $#   # ##  #  #  \n#    ##$###    #  ## \n# $    $ #  #  #   # \n#####    # ## # ## ##\n    #$# #  $  $ $   #\n    #@#  $#$$$  #   #\n    ###  $      #####\n      ##  #  #  #    \n       ##########    ";
+        if (n == 25) return "               ####    \n          ######  #####\n    #######       #   #\n    #      $ $ ## # # #\n    #  #### $  #     .#\n    #      $ # # ##.#.#\n    ##$####$ $ $ ##.#.#\n    #     #    ####.###\n    # $   ######  #.#.#\n######$$$##      @#.#.#\n#      #    #$#$###. .#\n# #### #$$$$$    # ...#\n# #    $     #   # ...#\n# #   ## ##     ###...#\n# ######$######  ######\n#        #    #  #     \n##########    ####     ";
+        if (n == 26) return "#########      \n#       #      \n#       ####   \n## #### #  #   \n## #@##    #   \n# $$$ $  $$#   \n#  # ## $  #   \n#  # ##  $ ####\n####  $$$ $#  #\n #   ##   ....#\n # #   # #.. .#\n #   # # ##...#\n ##### $  #...#\n     ##   #####\n      #####    ";
+        if (n == 27) return " #################     \n #...   #    #   ###   \n##.....  $## # # $ #   \n#......#  $  #  $  #   \n#......#  #  # # # ##  \n######### $  $ # #  ###\n  #     #$##$ ## ##   #\n ##   $    # $  $   # #\n #  ## ### #  #####$# #\n # $ $$     $   $     #\n # $    $##$ ######## #\n #######  @ ##      ###\n       ######          ";
+        if (n == 28) return "     #######   \n     #@ #  #   \n     # $   #   \n    ### ## #   \n #### $  # ##  \n #       #  ## \n # $ $#### $ # \n # $$ #  #  $# \n #$  $   #$  # \n##  $$#   $$ ##\n# $$  #  #  $ #\n#     #### $  #\n#  #$##..##   #\n### .#....#####\n  # .......##  \n  #....   ..#  \n  ###########  ";
+        if (n == 29) return "                #####   \n       ###### ###   ####\n   #####    ### $ $  $ #\n####  ## #$ $    $ #   #\n#....   $$ $ $  $   #$##\n#.. # ## #   ###$## #  #\n#....    # ###    #    #\n#....    # ##  $  ###$ #\n#..######  $  #  #### ##\n####    #   ###    @  # \n        ############### ";
+        if (n == 30) return " #####        \n #   #######  \n # $ ###   #  \n # $    $$ #  \n ## ####   #  \n### #  # ###  \n#   #  #@##   \n# $$    $ #   \n#   # # $ ####\n##### #   #  #\n #   $####   #\n #  $     $  #\n ##   ##### ##\n ##########  #\n##....# $  $ #\n#.....# $$#  #\n#.. ..# $  $ #\n#.....$   #  #\n##  ##########\n ####         ";
+        if (n == 31) return " #######       \n #  #  #####   \n##  #  #...### \n#  $#  #...  # \n# $ #$$ ...  # \n#  $#  #... .# \n#   # $########\n##$       $ $ #\n##  #  $$ #   #\n ######  ##$$@#\n      #      ##\n      ######## ";
+        if (n == 32) return "  ####            \n  #  #########    \n ##  ## @#   #    \n #  $# $ $   #### \n #$  $  # $ $#  ##\n##  $## #$ $     #\n#  #  # #   $$$  #\n# $    $  $## ####\n# $ $ #$#  #  #   \n##  ###  ###$ #   \n #  #....     #   \n ####......####   \n   #....####      \n   #...##         \n   #...#          \n   #####          ";
+        if (n == 33) return "      ####   \n  #####  #   \n ##     $#   \n## $  ## ### \n#@$ $ # $  # \n#### ##   $# \n #....#$ $ # \n #....#   $# \n #....  $$ ##\n #... # $   #\n ######$ $  #\n      #   ###\n      #$ ### \n      #  #   \n      ####   ";
+        if (n == 34) return "############\n##     ##  #\n##   $   $ #\n#### ## $$ #\n#   $ #    #\n# $$$ # ####\n#   # # $ ##\n#  #  #  $ #\n# $# $#    #\n#   ..# ####\n####.. $ #@#\n#.....# $# #\n##....#  $ #\n###..##    #\n############";
+        if (n == 35) return "############  ######\n#   #    #@####....#\n#   $$#       .....#\n#   # ###   ## ....#\n## ## ###  #   ....#\n # $ $     # ## ####\n #  $ $##  #       #\n#### #  #### ## ## #\n#  # #$   ## ##    #\n# $  $  # ## #######\n# # $ $    # #      \n#  $ ## ## # #      \n# $$     $$  #      \n## ## ### $  #      \n #    # #    #      \n ###### ######      ";
+        if (n == 36) return "     ####         \n   ###  ##        \n####  $  #        \n#   $ $  ####     \n# $   # $   # ####\n#  #  #   $ # #..#\n##$#$ ####$####..#\n #   ##### ## ...#\n #$# ##@## ##  ..#\n # #    $     ...#\n #   #### ###  ..#\n ### ## #  ## ...#\n  ##$ ####$ ###..#\n  #   ##    # #..#\n ## $$##  $ # ####\n #     $$$$ #     \n # $ ###    #     \n #   # ######     \n #####            ";
+        if (n == 37) return "###########          \n#......   #########  \n#......   #  ##   #  \n#..### $    $     #  \n#... $ $ #  ###   #  \n#...#$#####    #  #  \n###    #   #$  # $###\n  #  $$ $ $  $##  $ #\n  #  $   #$#  ##    #\n  ### ## #  $ #######\n   #  $ $ ## ##      \n   #    $  $  #      \n   ##   # #   #      \n    #####@#####      \n        ###          ";
+        if (n == 38) return " #########    \n #....   ##   \n #.#.#  $ ##  \n##....# # @## \n# ....#  #  ##\n#     #$ ##$ #\n## ###  $    #\n #$  $ $ $#  #\n # #  $ $ ## #\n #  ###  ##  #\n #    ## ## ##\n #  $ #  $  # \n ###$ $   ### \n   #  #####   \n   ####       ";
+        if (n == 39) return "              ###      \n             ##.###    \n             #....#    \n #############....#    \n##   ##     ##....#####\n#  $$##  $ @##....    #\n#      $$ $#  ....#   #\n#  $ ## $$ # #....#  ##\n#  $ ## $  # ## ###  # \n## ##### ###         # \n##   $  $ ##### ###  # \n# $###  # ##### # #### \n#   $   #       #      \n#  $ #$ $ $###  #      \n# $$$# $   # ####      \n#    #  $$ #           \n######   ###           \n     #####             ";
+        if (n == 40) return "      #### \n####### @# \n#     $  # \n#   $## $# \n##$#...# # \n # $...  # \n # #. .# ##\n #   # #$ #\n #$  $    #\n #  #######\n ####      ";
+        if (n == 41) return "           #####    \n          ##   ##   \n         ##     #   \n        ##  $$  #   \n       ## $$  $ #   \n       # $    $ #   \n####   #   $$ ##### \n#  ######## ##    # \n#..           $$$@# \n#.# ####### ##   ## \n#.# #######. #$ $###\n#........... #   $ #\n##############  $  #\n             ##  ###\n              ####  ";
+        if (n == 42) return " ########    \n #@##   #### \n # $   $   # \n #  $ $ $$$# \n # $$# #   # \n##$    $   # \n#  $  $$$$$##\n# $#### #   #\n#  $....#   #\n# ##....#$$ #\n# ##....   ##\n#   ....#  # \n## #....#$$# \n # #....#  # \n #         # \n #### ##$### \n    #    #   \n    ######   ";
+        if (n == 43) return "    ############ \n    #          ##\n    #  # #$$ $  #\n    #$ #$#  ## @#\n   ## ## # $ # ##\n   #   $ #$  # # \n   #   # $   # # \n   ## $ $   ## # \n   #  #  ##  $ # \n   #    ## $$# # \n######$$   #   # \n#....#  ######## \n#.#... ##        \n#....   #        \n#....   #        \n#########        ";
+        if (n == 44) return "      ######             \n   #####   #             \n   #   # # #####         \n   # $ #  $    ######    \n  ##$  ### ##       #    \n###  $$ $ $ #  ##   #####\n#       $   ###### ##   #\n#  ######## #@   # #  # #\n## ###      #### #$# #  #\n # ### #### ##.. #   $ ##\n #  $  $  #$##.. #$##  ##\n #  # # #     ..## ## $ #\n ####   # ## #..#    $  #\n    #####    #..# # #  ##\n        ######..#   # ## \n             #..#####  # \n             #..       # \n             ##  ###  ## \n              #########  ";
+        if (n == 45) return "        #######    \n    #####  #  #### \n    #   #   $    # \n #### #$$ ## ##  # \n##      # #  ## ###\n#  ### $#$  $  $  #\n#...    # ##  #   #\n#...#    @ # ### ##\n#...#  ###  $  $  #\n######## ##   #   #\n          #########";
+        if (n == 46) return "    #########  ####   \n    #   ##  ####  #   \n    #   $   #  $  #   \n    #  # ## #     ####\n    ## $   $ $$# #   #\n    ####  #  # $ $   #\n#####  ####    ###...#\n#   #$ #  # ####.....#\n#      #  # # ##.....#\n###### #  #$   ###...#\n   #   ## # $#   #...#\n  ##       $  $# #####\n ## $$$##  # $   #    \n #   #  # ###  ###    \n #   $  #$ @####      \n #####  #   #         \n     ########         ";
+        if (n == 47) return " #####             \n #   #             \n # # ######        \n #      $@######   \n # $ ##$ ###   #   \n # #### $    $ #   \n # ##### #  #$ ####\n##  #### ##$      #\n#  $#  $  # ## ## #\n#         # #...# #\n######  ###  ...  #\n     #### # #...# #\n          # ### # #\n          #       #\n          #########";
+        if (n == 48) return "       ####     \n       #  ##    \n       #   ##   \n       # $$ ##  \n     ###$  $ ## \n  ####    $   # \n###  # #####  # \n#    # #....$ # \n# #   $ ....# # \n#  $ # #. ..# # \n###  #### ### # \n  #### @$  ##$##\n     ### $     #\n       #  ##   #\n       #########";
+        if (n == 49) return "      ############ \n     ##..    #   # \n    ##..  $    $ # \n   ##.. .# # #$ ## \n   #.. .# # # $  # \n####...#  #    # # \n#  ## #          # \n# @$ $ ###  # # ## \n# $   $   # #   #  \n###$$   # # # # #  \n  #   $   # # #####\n  # $# #####      #\n  #$   #   #   #  #\n  #  ###   ##     #\n  #  #      #    ##\n  ####      ###### ";
+        if (n == 50) return "     #############   \n     #    ###    #   \n     #     $ $  #### \n   #### #   $ $    # \n  ## $  #$#### $ $ # \n###   # #   ###  $ # \n# $  $  #  $  # #### \n# ##$#### #$#  $  ###\n# ##  ### # # #  $  #\n#    @$   $   # $ # #\n#####  #  ##  # $#  #\n  #... #####$  #  # #\n  #.......# $$ #$ # #\n  #.......#         #\n  #.......#######  ##\n  #########     #### ";
+        if (n == 51) return "##### ####      \n#...# #  ####   \n#...###  $  #   \n#....## $  $### \n##....##   $  # \n###... ## $ $ # \n# ##    #  $  # \n#  ## # ### ####\n# $ # #$  $    #\n#  $ @ $    $  #\n#   # $ $$ $ ###\n#  ######  ###  \n# ##    ####    \n###             ";
+        if (n == 52) return " ####                \n##  #####            \n#       # #####      \n# $###  ###   #      \n#..#  $# #  # #      \n#..#      $$# ###    \n#. # #  #$ $    #####\n#..#  ##     ##$#   #\n#. $  $ # ##  $     #\n#..##  $   #   ######\n#. ##$##   #####     \n#..  $ #####         \n#  # @ #             \n########             ";
+        if (n == 53) return "   ##########\n   #  ###   #\n   # $   $  #\n   #  ####$##\n   ## #  #  #\n  ##  #.    #\n  #  ##..#  #\n  # @ #. # ##\n  # #$#..#$ #\n  # $ #..#  #\n  # # #  #  #\n  # $ #..#$##\n  #    . #  #\n ###  #  #  #\n##    ####  #\n#  #######$##\n# $      $  #\n#  ##   #   #\n#############";
+        if (n == 54) return " ##################### \n #   ##  #   #   #   # \n # $     $   $   $   ##\n##### #  #   ### ##$###\n#   # ##$######   #   #\n# $   # ......#   # $ #\n## #  # ......#####   #\n## #########..#   # ###\n#          #..# $   #  \n# ## ### ###..## #  ###\n# #   #   ##..## ###  #\n#   @      $..#       #\n# #   #   ##  #   ##  #\n##### ############## ##\n#          #   #    $ #\n# $  # $ $ $   # #    #\n# #$## $#  ## ##    # #\n#  $ $$ #### $  $ # # #\n#          #   #      #\n#######################";
+        if (n == 55) return " #####################\n##                   #\n#    $ #      ## #   #\n#  ###### ###  #$## ##\n##$#   ##$#....   # # \n#  #    $ #....## # # \n# $ # # # #....##   # \n# $ #$$   #....##$# # \n# # $@$##$#....##   # \n#   $$$   #....#    # \n#  $#   # ###### $### \n##  # ###$$  $   $ #  \n##     # $  $ ##   #  \n #####   #   #######  \n     #########        ";
+        if (n == 56) return "##########    \n#        #### \n# ###### #  ##\n# # $ $ $  $ #\n#       #$   #\n###$  $$#  ###\n  #  ## # $## \n  ##$#   $ @# \n   #  $ $ ### \n   # #   $  # \n   # ##   # # \n  ##  ##### # \n  #         # \n  #.......### \n  #.......#   \n  #########   ";
+        if (n == 57) return "         ####     \n #########  ##    \n##  $      $ #####\n#   ## ##   ##...#\n# #$$ $ $$#$##...#\n# #    @  #   ...#\n#  $# ###$$   ...#\n# $  $$  $ ##....#\n###$       #######\n  #  #######      \n  ####            ";
+        if (n == 58) return "              ######       \n          #####    #       \n          #  ## #  #####   \n          #    .#..#   #   \n ##### #### $#.#...    #   \n #   ###  ## # ....## ##   \n # $      ## #..#..## #    \n###### #   # # .##### #    \n#   # $#$# # #..##### #    \n# $  $     # # .    # #    \n## ##  $ ### #  ##  # #    \n #  $  $ ### ##### ## #    \n ###$###$###  #### ## #    \n#### #         ###  # #    \n#  $ #  $####  ###$$#@#####\n#      $ # #  ####  #$#   #\n#### #  $# #              #\n   #  $  # ##  ##  ########\n   ##  ###  ########       \n    ####                   ";
+        if (n == 59) return "         ####                \n         #  #                \n         #  ########         \n   #######  #      #         \n   #   # # # # #   ##        \n   # $     $  ##  $ #        \n  ### $# #  # #     #########\n  #  $  #  $# # $$ #   # #  #\n ## #   #     ###    $ # #  #\n #  #$   # ###  #  # $$# #  #\n #    $## $  #   ## $  # # ##\n####$ $ #    ##  #   $    ..#\n#  #    ### # $ $ ###  ###. #\n#     ##  $$ @  $     ##....#\n#  ##  ##   $  #$#  ##.... .#\n## #  $  # # $##  ##.... .###\n## ##  $  # $ #  #.... .###  \n#    $ ####   # .... .###    \n#   #  #  #  #  .. .###      \n########  ###########        ";
+        if (n == 60) return "        #####             \n        #   ####          \n        # $    ####  #### \n        #   # $#  ####  # \n########### #   $   #   # \n#..     # $  #### #  #  # \n#..$  #   $  #  $ # $ .## \n#. # # $ $ ##  ##    #.#  \n#..#$ @ #   ##    $$ #.#  \n#..# $ $  $ $ ##   ## .#  \n#. $$ # ##   $ #$# $ #.#  \n#..#      ##   #     #.#  \n#..#######  ### ######.## \n# $$                   .##\n#  ##################  ..#\n####                ######";
+        return "#####\n#@$.#\n#####";
     }
 
     // ======================================================================

@@ -54,6 +54,8 @@ public class Native {
     public static final int SYS_PRESENT          = 26; // Copiar buffer trasero a la VRAM real
     public static final int SYS_SET_CLIP         = 27; // Limitar el dibujo a un rectángulo
     public static final int SYS_FILL_BLEND       = 28; // Rellenar mezclando al 50% (sombras)
+    public static final int SYS_STR_LEN          = 29; // Longitud de un literal de cadena
+    public static final int SYS_STR_BYTE         = 30; // Byte i-esimo de un literal de cadena
 
 
     // FIRMAS NATIVAS

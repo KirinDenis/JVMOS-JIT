@@ -51,6 +51,8 @@ global sys_draw_string
 global sys_present
 global sys_set_clip
 global sys_fill_blend
+global sys_str_len
+global sys_str_byte
 global current_color
 global vram_back_buffer
 global clip_x
@@ -1398,6 +1400,60 @@ sys_draw_string:
 
 .done:
     popa
+    pop ebp
+    ret
+
+
+; ACCESO A LITERALES DE CADENA
+; Un literal de Java llega como puntero a los bytes UTF-8 del constant pool,
+; con su longitud en los dos bytes anteriores. Java no puede indexarlo por sí
+; mismo (String.getBytes leería un offset calculado a partir del CP), así que
+; el HAL expone la longitud y el byte i-ésimo.
+
+; sys_str_len(ptr) -> longitud
+sys_str_len:
+    push ebp
+    mov ebp, esp
+    push esi
+    xor eax, eax
+    mov esi, [ebp + 8]
+    test esi, esi
+    jz .done
+    movzx eax, byte [esi - 2]
+    shl eax, 8
+    mov al, byte [esi - 1]
+.done:
+    pop esi
+    pop ebp
+    ret
+
+; sys_str_byte(ptr, i) -> byte, o -1 si i queda fuera
+sys_str_byte:
+    push ebp
+    mov ebp, esp
+    push esi
+    push ecx
+    push edx
+
+    mov eax, -1
+    mov esi, [ebp + 8]
+    test esi, esi
+    jz .done
+    mov ecx, [ebp + 12]
+    cmp ecx, 0
+    jl .done
+
+    movzx edx, byte [esi - 2]
+    shl edx, 8
+    mov dl, byte [esi - 1]
+    cmp ecx, edx
+    jge .done
+
+    movzx eax, byte [esi + ecx]
+.done:
+    pop edx
+    pop ecx
+    pop esi
     pop ebp
     ret
 
