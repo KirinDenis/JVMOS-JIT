@@ -1,31 +1,38 @@
 # JVMOS-JIT
-It is an improved fork of the repository: https://github.com/aayes89/JVMOS.
 
-A baremetal operating system whose userland is Java bytecode compiled to native
-x86 at runtime. There is no JVM underneath and no operating system underneath:
-the kernel parses `.class` files itself and translates their bytecode into
-machine code. Alongside it runs a WebAssembly interpreter, so a second kind of
-program can execute in a sandbox that cannot reach kernel memory.
+A baremetal operating system with no operating system underneath it. The kernel
+reads `.class` files and translates their bytecode into x86 machine code
+itself, and runs WebAssembly programs beside them in a sandbox.
 
-It boots in a browser, with no install: https://kirindenis.github.io/JVMOS-JIT/
+![The desktop. The File Manager lists the FAT32 volume, and Sokoban (Rust) is a WebAssembly program that was read off that volume and started in the sandbox.](docs/img/desktop.png)
+
+![The Java Sokoban running on the JIT, the File Manager, and the text editor holding README.TXT — the file the system wrote to itself when it formatted the blank disk at first boot.](docs/img/apps.png)
+
+### Try it in the browser: https://kirindenis.github.io/JVMOS-JIT/
+
+Nothing to install. The page boots the real image in the v86 emulator.
+
+It is an improved fork of https://github.com/aayes89/JVMOS — the boot chain and
+the JIT's translator are that project's work.
 
 # What is in it
 * A JIT that turns Java bytecode into x86 machine code, with lazy compilation
   and self-patching call sites
-* A desktop with resizable windows, menus, a taskbar, keyboard navigation and
-  a flat widget set (buttons, checkboxes, radio groups, text fields, lists)
+* A desktop with icons, resizable windows, menus, a taskbar, keyboard
+  navigation and a flat widget set (buttons, checkboxes, radio groups, text
+  fields, lists)
 * Double buffered VESA graphics with clipping and alpha blended shadows
-* Sokoban, twice: once written in Java and executed by the JIT, once written in
-  Rust, compiled to WebAssembly and executed inside the sandbox
 * A WebAssembly interpreter covering the i32 core of the MVP instruction set,
   with every linear memory access bounds checked
 * A FAT32 volume the system mounts at boot, and formats itself if the disk is
   blank, keeping the first megabyte outside the partition for a system image
-* A text editor, and file associations: the File Manager lists the real
-  directory, and Enter opens a file in whatever handles its extension
-* Programs loaded from the volume: a `.WSM` file is read off the disk and run
-  in the WebAssembly sandbox, with no relocation and no linking
-* A desktop with icons; windows open from them rather than all at once
+* Programs loaded from that volume: a `.WSM` file is read off the disk and
+  started in the sandbox, with no relocation and no linking
+* A text editor, and file associations: Enter on a file opens it in whatever
+  handles its extension
+* Sound Blaster 16 output with mixed voices, falling back to the PC speaker
+* Sokoban, twice: once written in Java and executed by the JIT, once written in
+  Rust, compiled to WebAssembly and executed inside the sandbox
 
 # Requirements
 * C-Compiler: gcc-12
@@ -61,26 +68,28 @@ to pick up a new build.
 * [doc/WASM-SANDBOX.md](doc/WASM-SANDBOX.md) - the interpreter, the host ABI and
   how to build a guest program
 * [doc/FILESYSTEM.md](doc/FILESYSTEM.md) - the FAT32 volume, the system area
-  reserved outside the partition, and when the system will and will not format
-  a disk
+  reserved outside the partition, when the system will and will not format a
+  disk, and how a program is loaded from it
 * [doc/SYSCALLS.md](doc/SYSCALLS.md) - the syscall table
 * [doc/TESTING.md](doc/TESTING.md) - how to check changes without building the
   image
 
 # TODO
-* Load programs from disk or over the wire instead of embedding them
-* Sound: v86 emulates a Sound Blaster 16, the kernel only drives the PC speaker
-* Network support
-* Subdirectories and long file names; the volume is 8.3 and root-only today
-* (FAT/FAT32, NTFS, etc.) support
-* Test useful apps (Notepad, Paint, Calculator)
-
-# Screenshots
-
-### JIT Tests PASSED!
-<img width="1016" height="389" alt="imagen" src="https://github.com/user-attachments/assets/ca85eb75-cab0-4432-a411-461381ccc0fc" />
-
-### Test UI
-<img width="1024" height="834" alt="imagen" src="https://github.com/user-attachments/assets/431dbd24-4842-4d5b-98a3-fe33ddc94120" />
-
-<img width="1021" height="826" alt="imagen" src="https://github.com/user-attachments/assets/4bd80ea3-48e1-4743-b3a5-f7174f54dbbe" />
+* More than one program at once. The sandbox has a single slot, so starting a
+  program replaces the last one; it needs an array of instances and a host
+  context per instance
+* An instruction budget per program, so one that never returns cannot hold the
+  frame. This is cheap here precisely because WebAssembly is interpreted: the
+  interpreter can stop mid-execution and resume next frame, with no timer
+  interrupt and no context switch
+* A task manager, once those two exist — it can then report measured numbers,
+  instructions spent and whether a program yielded or was cut off, rather than
+  invented percentages
+* Subdirectories and long file names; the volume is 8.3 and root-only
+* Giving memory back. The kernel heap is a bump allocator with no free, so
+  nothing a program allocates is ever reclaimed
+* Networking. The kernel drives an RTL8139 and v86 emulates an NE2000, so the
+  network is dead code in a browser
+* A JIT for WebAssembly, keeping the interpreter as the reference to test its
+  code generation against
+* More programs to run: something that draws, and a calculator
