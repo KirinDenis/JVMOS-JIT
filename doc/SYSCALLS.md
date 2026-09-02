@@ -64,6 +64,7 @@ method up by name.
 | 44 | `SYS_FS_FREE_KB` | | free space, from walking the FAT |
 | 45 | `SYS_FS_TOTAL_KB` | | size of the volume |
 | 46 | `SYS_FS_EDIT` | a = operation, b and c its arguments | depends on the operation |
+| 47 | `SYS_FS_RUN` | a = entry | 1, or a negative error |
 
 Names come back one byte at a time because a syscall returns an `int` and
 nothing else. Allocating a Java string inside the kernel is a far larger thing

@@ -72,6 +72,7 @@ public class Native {
     public static final int SYS_FS_FREE_KB       = 44; // Espacio libre en KB
     public static final int SYS_FS_TOTAL_KB      = 45; // Espacio total del volumen en KB
     public static final int SYS_FS_EDIT          = 46; // Editor: a = operacion, b y c argumentos
+    public static final int SYS_FS_RUN           = 47; // Lanza el programa a: 1, o codigo negativo
 
     // Operaciones de SYS_FS_EDIT, iguales que en fs/fat32_disk.c
     public static final int ED_CAPACITY   = 0;

@@ -63,7 +63,7 @@ section .text
 	extern wasm_guest_frame, wasm_push_key, wasm_set_sound, wasm_music_tick
 	extern sb16_present, audio_play
 	extern fs_status, fs_count, fs_name_byte, fs_entry_size, fs_entry_is_dir
-	extern fs_free_kb, fs_total_kb, fs_edit
+	extern fs_free_kb, fs_total_kb, fs_edit, fs_run
 
 jit_init:
     push eax
@@ -379,6 +379,8 @@ sys_native_dispatch:
     je .sys_fs_total
     cmp eax, 46
     je .sys_fs_edit
+    cmp eax, 47
+    je .sys_fs_run
 
     xor eax, eax
     jmp .done
@@ -672,6 +674,13 @@ sys_native_dispatch:
     push dword [sys_arg_a]
     call fs_edit
     add esp, 12
+    jmp .done
+
+; Carga un programa del volumen y se lo entrega al sandbox.
+.sys_fs_run:
+    push dword [sys_arg_a]
+    call fs_run
+    add esp, 4
     jmp .done
 
 .sys_c_selftest:

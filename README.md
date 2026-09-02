@@ -23,6 +23,9 @@ It boots in a browser, with no install: https://kirindenis.github.io/JVMOS-JIT/
   blank, keeping the first megabyte outside the partition for a system image
 * A text editor, and file associations: the File Manager lists the real
   directory, and Enter opens a file in whatever handles its extension
+* Programs loaded from the volume: a `.WSM` file is read off the disk and run
+  in the WebAssembly sandbox, with no relocation and no linking
+* A desktop with icons; windows open from them rather than all at once
 
 # Requirements
 * C-Compiler: gcc-12

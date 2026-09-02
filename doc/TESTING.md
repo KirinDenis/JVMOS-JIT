@@ -113,6 +113,13 @@ its result can be read: format, open the file, unpack `README  TXT` back into
 `README.TXT`, type, insert in the middle, name it, save, reopen it as a fresh
 boot would, overwrite it without duplicating the entry, and delete it.
 
+It also covers the program loader, with stand-ins for the WebAssembly host so
+the interpreter and the framebuffer stay out of it. The builtin module is
+replaced by a byte pattern of the same size, because the thing worth testing is
+that a binary of that size survives being written to the volume at format time
+and comes back byte for byte when it is launched -- a file that spans forty-odd
+clusters is where a chain bug would actually show.
+
 ```
 cl /nologo /W4 /Fe:build\fs_edit_test.exe tests\fs_edit_test.c fs\fat32_disk.c fs\fat32.c
 build\fs_edit_test.exe disk.img

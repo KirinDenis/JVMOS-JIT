@@ -17,9 +17,28 @@ extern int fs_init(void);
 extern int fs_count(void);
 extern int fs_name_byte(int index, int offset);
 extern int fs_entry_size(int index);
+extern int fs_run(int index);
 
 static FILE *g_img;
 static int g_fail;
+
+/*
+ * Stand-ins for the WebAssembly host, so the loader can be exercised without
+ * dragging the interpreter and the framebuffer in here. The builtin module is
+ * a byte pattern of the same size as the real one, which is the thing worth
+ * testing: that a binary of that size survives being written to the volume at
+ * format time and read back byte for byte when it is launched.
+ */
+#define FAKE_BUILTIN_LEN 22155
+static unsigned char g_builtin[FAKE_BUILTIN_LEN];
+static unsigned char g_progbuf[65536];
+static int g_prog_len = -1;
+
+const unsigned char *wasm_builtin_bytes(void) { return g_builtin; }
+int wasm_builtin_len(void) { return FAKE_BUILTIN_LEN; }
+unsigned char *wasm_prog_buffer(void) { return g_progbuf; }
+int wasm_prog_capacity(void) { return (int)sizeof(g_progbuf); }
+int wasm_prog_use(int len) { g_prog_len = len; return 1; }
 
 /* The two functions fat32_disk.c expects the platform to provide. */
 int sys_disk_read_sector(unsigned lba, unsigned char *buffer)
@@ -128,9 +147,29 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    for (at = 0; at < FAKE_BUILTIN_LEN; at++)
+        g_builtin[at] = (unsigned char)(at * 31 + (at >> 7));
+
     printf("\n-- boot --\n");
     check("mount or format succeeded", fs_init() != 0);
-    check_int("entries after formatting", fs_count(), 1);
+    check_int("entries after formatting", fs_count(), 2);
+
+    printf("\n-- the program the format wrote --\n");
+    idx = find_entry("SOKOBAN");
+    check("SOKOBAN.WSM is on the volume", idx >= 0);
+    check_int("its size on disk", fs_entry_size(idx), FAKE_BUILTIN_LEN);
+    check_int("launching it succeeds", fs_run(idx), 1);
+    check_int("the loader read the whole file", g_prog_len, FAKE_BUILTIN_LEN);
+    {
+        int i, same = 1;
+        for (i = 0; i < FAKE_BUILTIN_LEN; i++)
+            if (g_progbuf[i] != g_builtin[i]) { same = 0; break; }
+        check("every byte came back unchanged", same);
+    }
+    check_int("launching a directory index that is not there refuses",
+              fs_run(999), -1);
+    check("launching did not disturb the editor's filename",
+          fs_edit(ED_NAME_LEN, 0, 0) == 0);
 
     printf("\n-- open the file the format wrote --\n");
     idx = find_entry("README");
@@ -173,7 +212,7 @@ int main(int argc, char **argv)
     check("the field keeps what was typed", strcmp(name, "notes.txt") == 0);
     check("save succeeds", fs_edit(ED_SAVE, 0, 0) == 1);
     check_int("saving clears dirty", fs_edit(ED_DIRTY, 0, 0), 0);
-    check_int("the directory now holds two files", fs_count(), 2);
+    check_int("the directory now holds three files", fs_count(), 3);
 
     printf("\n-- reopen it, as a fresh boot would --\n");
     idx = find_entry("NOTES");
@@ -191,12 +230,12 @@ int main(int argc, char **argv)
     printf("\n-- overwrite, not duplicate --\n");
     check("insert", fs_edit(ED_INSERT, 0, 'X') == 1);
     check("save over the same name", fs_edit(ED_SAVE, 0, 0) == 1);
-    check_int("still two files, not three", fs_count(), 2);
+    check_int("still three files, not four", fs_count(), 3);
     check_int("the new size is on disk", fs_entry_size(find_entry("NOTES")), 19);
 
     printf("\n-- delete --\n");
     check("remove", fs_edit(ED_REMOVE, find_entry("NOTES"), 0) == 1);
-    check_int("one file left", fs_count(), 1);
+    check_int("two files left", fs_count(), 2);
     check("NOTES is gone", find_entry("NOTES") < 0);
     check("README survived", find_entry("README") >= 0);
 

@@ -65,9 +65,35 @@ a consequence of any decision the user made, it is just a bad control.
 
 Opening a file means deciding what can open it, and the extension is all there
 is to decide with: nothing sniffs the contents. `TXT`, `LOG`, `INI`, `CFG`,
-`CSV`, `MD` and files with no extension at all go to the text editor. Anything
-else is reported as having no association rather than being opened as garbage.
-The table is `isTextFile` in `kernel/Boot.java`.
+`CSV`, `MD` and files with no extension at all go to the text editor; `WSM`
+goes to the WebAssembly sandbox. Anything else is reported as having no
+association rather than being opened as garbage. The table is `appFor` in
+`kernel/Boot.java`.
+
+`WSM` and not `WASM` because an 8.3 name has room for three characters of
+extension and no more.
+
+# Running a program off the volume
+
+Formatting writes `SOKOBAN.WSM` as well as `README.TXT` -- the guest compiled
+into the kernel, written out as a file, so a fresh disk has something to launch
+and the whole path gets exercised on first boot.
+
+Pressing Enter on it in the File Manager reads it into a buffer and hands it to
+the sandbox. That is the entire loader, and `fs_run` in `fs/fat32_disk.c` is
+about ten lines, because a WebAssembly module needs none of what makes a loader
+hard: no relocation, no fixed load address, no linking against the kernel. It
+names the imports it wants, and the sandbox either has them or refuses to start
+it.
+
+Starting a program clears the guest's linear memory and drops any queued
+keystrokes first. Without that a new program would open its eyes on whatever
+the last one left behind, which is a bug on its own and a channel between two
+programs that are meant to be strangers.
+
+There is still only one slot: launching a program replaces whatever was
+running. Several at once means an array of instances and a per-instance host
+context, which is the next step rather than this one.
 
 ## Where the text lives
 

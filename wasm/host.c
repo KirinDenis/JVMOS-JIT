@@ -52,6 +52,15 @@ static unsigned char g_mem[65536];      /* one page: all the guest may address *
 static int g_loaded;
 static int g_failed;                    /* remembers a load failure, do not retry every frame */
 
+/*
+ * A program read from the volume. wasm_load parses a module in place, so these
+ * bytes have to outlive the call -- they cannot be a buffer belonging to
+ * whoever read the file. This is where a loader is told to put them.
+ */
+#define WASM_PROG_MAX 65536
+static unsigned char g_prog[WASM_PROG_MAX];
+static int g_from_disk;                 /* 1 once a module came off the disk */
+
 static int g_ox, g_oy, g_ow, g_oh;      /* window origin and size */
 static int g_color = 0x00FFFFFF;
 
@@ -353,6 +362,78 @@ void wasm_push_key(int code)
  * Returns 1 on success, or the negated wasm_err so the desktop can say what
  * went wrong instead of silently drawing nothing.
  */
+/*
+ * Points the guest at a module. Returns 1, or the negated wasm_err.
+ *
+ * The linear memory is cleared first. Without that a newly started program
+ * would open its eyes on whatever the last one left lying there -- a bug on
+ * its own, and a channel between two programs that are meant to be strangers.
+ * The key queue is dropped for the same reason: keystrokes typed at the old
+ * program have no business arriving in the new one.
+ */
+static int use_module(const unsigned char *bytes, unsigned len, int from_disk)
+{
+    wasm_err e;
+    unsigned i;
+
+    for (i = 0; i < sizeof(g_mem); i++) g_mem[i] = 0;
+    g_key_head = 0;
+    g_key_tail = 0;
+
+    e = wasm_load(&g_mod, bytes, len, g_mem, (unsigned)sizeof(g_mem),
+                  g_hosts, (unsigned)(sizeof(g_hosts) / sizeof(g_hosts[0])), 0);
+    if (e != WASM_OK) {
+        g_loaded = 0;
+        g_failed = -(int)e;
+        return g_failed;
+    }
+    g_loaded = 1;
+    g_failed = 0;
+    g_from_disk = from_disk;
+    return 1;
+}
+
+/* Where a loader should put a program's bytes, and how many will fit. */
+unsigned char *wasm_prog_buffer(void)
+{
+    return g_prog;
+}
+
+int wasm_prog_capacity(void)
+{
+    return WASM_PROG_MAX;
+}
+
+/* Starts the module now sitting in that buffer. */
+int wasm_prog_use(int len)
+{
+    if (len <= 0 || len > WASM_PROG_MAX) return -(int)WASM_ERR_LIMIT;
+    return use_module(g_prog, (unsigned)len, 1);
+}
+
+/* Back to the Sokoban compiled into the kernel. */
+int wasm_prog_builtin(void)
+{
+    return use_module(wasm_guest_module, (unsigned)sizeof(wasm_guest_module), 0);
+}
+
+/* 1 if what is running came off the volume rather than out of the kernel. */
+int wasm_prog_from_disk(void)
+{
+    return g_from_disk;
+}
+
+/* The module compiled in, so a freshly formatted disk can be given a program. */
+const unsigned char *wasm_builtin_bytes(void)
+{
+    return wasm_guest_module;
+}
+
+int wasm_builtin_len(void)
+{
+    return (int)sizeof(wasm_guest_module);
+}
+
 int wasm_guest_frame(int x, int y, int w, int h)
 {
     wasm_err e;
@@ -362,11 +443,8 @@ int wasm_guest_frame(int x, int y, int w, int h)
     if (g_failed) return g_failed;
 
     if (!g_loaded) {
-        e = wasm_load(&g_mod, wasm_guest_module, (unsigned)sizeof(wasm_guest_module),
-                      g_mem, (unsigned)sizeof(g_mem),
-                      g_hosts, (unsigned)(sizeof(g_hosts) / sizeof(g_hosts[0])), 0);
-        if (e != WASM_OK) { g_failed = -(int)e; return g_failed; }
-        g_loaded = 1;
+        int r = wasm_prog_builtin();
+        if (r < 0) return r;
     }
 
     e = wasm_call(&g_mod, "frame", 0, 0, 0);

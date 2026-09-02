@@ -10,6 +10,9 @@
 #include "fat32.h"
 #include "fsedit.h"
 
+extern const unsigned char *wasm_builtin_bytes(void);
+extern int wasm_builtin_len(void);
+
 extern int sys_disk_read_sector(unsigned lba, unsigned char *buffer);
 extern int sys_disk_write_sector(unsigned lba, const unsigned char *buffer);
 extern void sys_serial_puts(const char *s);
@@ -138,6 +141,14 @@ int fs_init(void)
         fat32_write_file(&g_fs, "README.TXT", (const unsigned char *)text, n);
     }
 
+    /*
+     * And the program compiled into the kernel, written out as a file so there
+     * is something on the volume to launch. The extension is WSM and not WASM
+     * because 8.3 names have room for three characters and no more.
+     */
+    fat32_write_file(&g_fs, "SOKOBAN.WSM", wasm_builtin_bytes(),
+                     (unsigned)wasm_builtin_len());
+
     return g_status;
 }
 
@@ -222,21 +233,33 @@ static void name_clear(void)
     g_name_len = 0;
 }
 
-/* Turns the on-disk "README  TXT" back into "README.TXT". */
-static void name_unpack(const char *packed)
+/*
+ * Turns the on-disk "README  TXT" back into "README.TXT".
+ *
+ * The destination is a parameter rather than always being the editor's name,
+ * because launching a program also has to unpack a name and must not quietly
+ * rename whatever file the editor happens to have open.
+ */
+static int unpack_into(const char *packed, char *out)
 {
-    int i, end;
+    int i, end, n = 0;
 
-    name_clear();
     for (end = 8; end > 0 && packed[end - 1] == ' '; end--) { }
-    for (i = 0; i < end; i++) g_name[g_name_len++] = packed[i];
+    for (i = 0; i < end; i++) out[n++] = packed[i];
 
     for (end = 11; end > 8 && packed[end - 1] == ' '; end--) { }
     if (end > 8) {
-        g_name[g_name_len++] = '.';
-        for (i = 8; i < end; i++) g_name[g_name_len++] = packed[i];
+        out[n++] = '.';
+        for (i = 8; i < end; i++) out[n++] = packed[i];
     }
-    g_name[g_name_len] = 0;
+    out[n] = 0;
+    return n;
+}
+
+static void name_unpack(const char *packed)
+{
+    name_clear();
+    g_name_len = (unsigned)unpack_into(packed, g_name);
 }
 
 static int text_insert(unsigned off, int ch)
@@ -325,6 +348,37 @@ static int text_remove(int index)
     if (e.is_dir) return 0;
     name_unpack(e.name);
     return fat32_delete_file(&g_fs, g_name);
+}
+
+/* ------------------------------------------------------------ launching */
+
+extern unsigned char *wasm_prog_buffer(void);
+extern int wasm_prog_capacity(void);
+extern int wasm_prog_use(int len);
+
+/*
+ * Reads a program off the volume and hands it to the sandbox. Returns 1, or a
+ * negative code the desktop can show.
+ *
+ * This is the whole loader. It is short because a WebAssembly module needs no
+ * relocation, no fixed load address and no linking against the kernel: it
+ * declares the imports it wants by name, and the sandbox either has them or
+ * refuses to start it.
+ */
+int fs_run(int index)
+{
+    fat32_entry e;
+    char name[FS_NAME_MAX + 1];
+    int n;
+
+    if (g_status != FS_MOUNTED && g_status != FS_FORMATTED) return -1;
+    if (!fat32_list(&g_fs, (unsigned)index, &e)) return -1;
+    if (e.is_dir) return -1;
+
+    unpack_into(e.name, name);
+    n = fat32_read_file(&g_fs, name, wasm_prog_buffer(), (unsigned)wasm_prog_capacity());
+    if (n <= 0) return -2;
+    return wasm_prog_use(n);
 }
 
 int fs_edit(int op, int a, int b)

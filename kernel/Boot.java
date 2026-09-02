@@ -181,6 +181,15 @@ public class Boot {
     static int edNameFocus;             // 1 while the filename field takes the keys
     static int edStatus;                // 0 none, 1 saved, 2 save failed, 3 deleted
 
+    // Which application handles a file, decided by its extension alone.
+    static final int APP_NONE = 0;
+    static final int APP_EDITOR = 1;
+    static final int APP_WASM = 2;
+
+    // desktop icons
+    static int iconSel;                 // selected icon, -1 for none
+    static int iconClickTick;           // when the last icon click landed
+
     // Returned by SYS_FS_STATUS.
     static final int FS_ABSENT = 0;     // no disk answered
     static final int FS_MOUNTED = 1;    // an existing volume was found
@@ -244,23 +253,25 @@ public class Boot {
         setWin(W_WASM, 120, 150, 470, 380);
         setWin(W_EDIT, 250, 160, 520, 400);
 
-        wOpen[W_GALLERY] = 1;
+        // Only the File Manager opens at boot: it shows the volume, which is
+        // where the programs are. Everything else waits behind its icon.
+        wOpen[W_GALLERY] = 0;
         wOpen[W_FILES] = 1;
-        wOpen[W_SYSTEM] = 1;
+        wOpen[W_SYSTEM] = 0;
         wOpen[W_ABOUT] = 0;
-        wOpen[W_SOKOBAN] = 1;
-        wOpen[W_WASM] = 1;
-        wOpen[W_EDIT] = 0;      // opens when a file is opened, or from the menu
+        wOpen[W_SOKOBAN] = 0;
+        wOpen[W_WASM] = 0;
+        wOpen[W_EDIT] = 0;
 
         // The front of this list is the last entry, and handleKeys sends keys
         // to it, so a closed window must never sit there.
         zorder[0] = W_EDIT;
         zorder[1] = W_SYSTEM;
         zorder[2] = W_GALLERY;
-        zorder[3] = W_FILES;
-        zorder[4] = W_ABOUT;
-        zorder[5] = W_SOKOBAN;
-        zorder[6] = W_WASM;
+        zorder[3] = W_ABOUT;
+        zorder[4] = W_SOKOBAN;
+        zorder[5] = W_WASM;
+        zorder[6] = W_FILES;
 
         mouseX = 512;
         mouseY = 384;
@@ -289,6 +300,8 @@ public class Boot {
         edTop = 0;
         edNameFocus = 0;
         edStatus = 0;
+        iconSel = 0;
+        iconClickTick = 0;
         fieldFocus = 0;
         fieldLen = 0;
 
@@ -433,6 +446,13 @@ public class Boot {
 
         if (menuOpen >= 0) {
             menuKey(code);
+            return;
+        }
+
+        // Nothing is open, so the keyboard belongs to the desktop icons.
+        if (openWindows() == 0) {
+            desktopKey(code);
+            paint();
             return;
         }
 
@@ -626,22 +646,26 @@ public class Boot {
     // contents. A file the editor cannot open is said to have no association
     // rather than being opened as garbage.
     // ======================================================================
-    static int isTextFile(int idx) {
+    // WSM and not WASM: an 8.3 name has room for three characters of extension
+    // and no more.
+    static int appFor(int idx) {
         int a = Native.sys(Native.SYS_FS_NAME, idx, 8, 0, 0);
         int b = Native.sys(Native.SYS_FS_NAME, idx, 9, 0, 0);
         int c = Native.sys(Native.SYS_FS_NAME, idx, 10, 0, 0);
-        if (a == 32 && b == 32 && c == 32) return 1;    // no extension at all
-        if (a == 'T' && b == 'X' && c == 'T') return 1;
-        if (a == 'L' && b == 'O' && c == 'G') return 1;
-        if (a == 'I' && b == 'N' && c == 'I') return 1;
-        if (a == 'C' && b == 'F' && c == 'G') return 1;
-        if (a == 'C' && b == 'S' && c == 'V') return 1;
-        if (a == 'M' && b == 'D' && c == 32) return 1;
-        return 0;
+        if (a == 'W' && b == 'S' && c == 'M') return APP_WASM;
+        if (a == 32 && b == 32 && c == 32) return APP_EDITOR;   // no extension
+        if (a == 'T' && b == 'X' && c == 'T') return APP_EDITOR;
+        if (a == 'L' && b == 'O' && c == 'G') return APP_EDITOR;
+        if (a == 'I' && b == 'N' && c == 'I') return APP_EDITOR;
+        if (a == 'C' && b == 'F' && c == 'G') return APP_EDITOR;
+        if (a == 'C' && b == 'S' && c == 'V') return APP_EDITOR;
+        if (a == 'M' && b == 'D' && c == 32) return APP_EDITOR;
+        return APP_NONE;
     }
 
     static void openSelected() {
         int count = Native.sys(Native.SYS_FS_COUNT, 0, 0, 0, 0);
+        int app;
         fileArmed = -1;
         if (fileSel < 0 || fileSel >= count) return;
         if (Native.sys(Native.SYS_FS_ISDIR, fileSel, 0, 0, 0) == 1) {
@@ -649,11 +673,20 @@ public class Boot {
             play(SND_DENY);
             return;
         }
-        if (isTextFile(fileSel) == 0) {
-            fileMsg = 1;
-            play(SND_DENY);
+        app = appFor(fileSel);
+        if (app == APP_EDITOR) {
+            openInEditor();
             return;
         }
+        if (app == APP_WASM) {
+            runProgram();
+            return;
+        }
+        fileMsg = 1;
+        play(SND_DENY);
+    }
+
+    static void openInEditor() {
         if (edCall(Native.ED_OPEN, fileSel, 0) < 0) {
             fileMsg = 3;
             play(SND_DENY);
@@ -667,6 +700,23 @@ public class Boot {
         wOpen[W_EDIT] = 1;
         wMin[W_EDIT] = 0;
         raiseWin(W_EDIT);
+        play(SND_CLICK);
+    }
+
+    // The program is read off the volume and handed to the sandbox, which
+    // either finds the imports it asks for or refuses to start it. Nothing is
+    // relocated and nothing is linked: that is what makes the loader four
+    // lines instead of a subsystem.
+    static void runProgram() {
+        if (Native.sys(Native.SYS_FS_RUN, fileSel, 0, 0, 0) < 0) {
+            fileMsg = 6;
+            play(SND_DENY);
+            return;
+        }
+        fileMsg = 0;
+        wOpen[W_WASM] = 1;
+        wMin[W_WASM] = 0;
+        raiseWin(W_WASM);
         play(SND_CLICK);
     }
 
@@ -845,9 +895,11 @@ public class Boot {
 
         int i = windowAt(mouseX, mouseY);
         if (i < 0) {
+            desktopClick();
             paint();
             return;
         }
+        iconSel = -1;
         raiseWin(i);
 
         int ly = mouseY - wy[i];
@@ -1131,6 +1183,7 @@ public class Boot {
     // ======================================================================
     static void paint() {
         drawDesktop();
+        drawIcons();
         int k = 0;
         while (k < WIN_COUNT) {
             int id = zorder[k];
@@ -1405,6 +1458,171 @@ public class Boot {
     static int twoDigits(int v, int x, int y) {
         int nx = g.drawChar((char) ((v / 10) + 48), x, y);
         return g.drawChar((char) ((v % 10) + 48), nx, y);
+    }
+
+    // ======================================================================
+    // DESKTOP ICONS
+    //
+    // Windows no longer all open at boot, so the desktop needs somewhere to
+    // start from. One column down the left: click selects, click again on the
+    // same one opens it, and when nothing is open at all the arrow keys and
+    // Enter work the same way.
+    // ======================================================================
+    static final int ICON_X = 20;
+    static final int ICON_Y = MENU_H + 18;
+    static final int ICON_W = 128;
+    static final int ICON_H = 82;
+
+    static void drawIcons() {
+        int i = 0;
+        while (i < WIN_COUNT) {
+            drawIcon(i, ICON_X, ICON_Y + i * ICON_H);
+            i = i + 1;
+        }
+    }
+
+    static void drawIcon(int i, int x, int y) {
+        String name = winTitle(i);
+        int len = Native.sys(Native.SYS_STR_LEN, 0, 0, name, 0);
+        int tx = x + (ICON_W - len * 8) / 2;
+
+        // Tinted towards the title bar colour rather than darkened: the
+        // desktop is already dark, so a shadow behind an icon reads as
+        // nothing at all.
+        if (iconSel == i) {
+            g.setRGB(C_SEL);
+            g.setBlend(2);
+            g.fillBlend(x + 4, y + 2, ICON_W - 8, ICON_H - 10);
+            g.setBlend(1);
+        }
+        iconGlyph(i, x + ICON_W / 2 - 16, y + 8);
+        g.setRGB(C_TEXTLT);
+        g.drawString(name, tx, y + 50);
+    }
+
+    // Each glyph is a few rectangles. There are no bitmaps in this system, and
+    // at 32 pixels a shape only has to be told apart from six others.
+    static void iconGlyph(int i, int x, int y) {
+        if (i == W_FILES) {
+            g.setRGB(C_AMBER);
+            g.fillRect(x + 2, y + 4, 12, 3);        // the folder's tab
+            g.fillRect(x, y + 7, 32, 22);
+            g.setRGB(0x00A06B00);
+            g.fillRect(x, y + 25, 32, 4);
+            return;
+        }
+        if (i == W_EDIT) {
+            g.setRGB(C_LIGHT);
+            g.fillRect(x + 4, y + 2, 24, 28);       // a page with lines on it
+            g.setRGB(C_DARK);
+            g.fillRect(x + 8, y + 8, 16, 2);
+            g.fillRect(x + 8, y + 14, 16, 2);
+            g.fillRect(x + 8, y + 20, 10, 2);
+            return;
+        }
+        if (i == W_SOKOBAN || i == W_WASM) {
+            // a crate; the Rust guest gets its own colour so the two Sokobans
+            // are not the same icon twice
+            if (i == W_WASM) g.setRGB(0x00C06030); else g.setRGB(0x00C9860A);
+            g.fillRect(x + 3, y + 4, 26, 26);
+            g.setRGB(0x00000000);
+            g.fillRect(x + 3, y + 4, 26, 2);
+            g.fillRect(x + 3, y + 28, 26, 2);
+            g.fillRect(x + 3, y + 4, 2, 26);
+            g.fillRect(x + 27, y + 4, 2, 26);
+            g.fillRect(x + 14, y + 6, 4, 22);
+            return;
+        }
+        if (i == W_SYSTEM) {
+            g.setRGB(C_SURF2);
+            g.fillRect(x + 6, y + 6, 20, 20);       // a chip with its pins
+            g.setRGB(C_TITLE_A);
+            g.fillRect(x + 11, y + 11, 10, 10);
+            g.setRGB(C_TEXTLT);
+            g.fillRect(x + 2, y + 10, 4, 2);
+            g.fillRect(x + 2, y + 18, 4, 2);
+            g.fillRect(x + 26, y + 10, 4, 2);
+            g.fillRect(x + 26, y + 18, 4, 2);
+            return;
+        }
+        if (i == W_ABOUT) {
+            g.setRGB(C_TITLE_A);
+            g.fillRect(x + 6, y + 4, 20, 26);
+            g.setRGB(C_TEXTLT);
+            g.fillRect(x + 14, y + 9, 4, 4);        // an i
+            g.fillRect(x + 14, y + 16, 4, 10);
+            return;
+        }
+        // the gallery: a little window with a button in it
+        g.setRGB(C_LIGHT);
+        g.fillRect(x + 2, y + 4, 28, 26);
+        g.setRGB(C_TITLE_A);
+        g.fillRect(x + 2, y + 4, 28, 7);
+        g.setRGB(C_SURF2);
+        g.fillRect(x + 7, y + 16, 18, 8);
+        g.setRGB(C_DARK);
+        g.fillRect(x + 2, y + 4, 28, 1);
+        g.fillRect(x + 2, y + 29, 28, 1);
+    }
+
+    static int iconAt(int px, int py) {
+        int i = 0;
+        while (i < WIN_COUNT) {
+            if (hit(px, py, ICON_X, ICON_Y + i * ICON_H, ICON_W, ICON_H - 8)) return i;
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    // A click selects; a second click on the same icon soon after opens it,
+    // which is the gesture a Windows user will try without being told.
+    static void desktopClick() {
+        int k = iconAt(mouseX, mouseY);
+        int now = Native.sys(Native.SYS_GET_TICKS, 0, 0, 0, 0);
+        if (k < 0) {
+            iconSel = -1;
+            return;
+        }
+        if (k == iconSel && now - iconClickTick < 400) {
+            iconClickTick = 0;
+            openIcon(k);
+            return;
+        }
+        iconSel = k;
+        iconClickTick = now;
+        if (chkSound == 1) clickTone();
+    }
+
+    static void openIcon(int i) {
+        if (i < 0 || i >= WIN_COUNT) return;
+        wOpen[i] = 1;
+        wMin[i] = 0;
+        raiseWin(i);
+        play(SND_CLICK);
+    }
+
+    static int openWindows() {
+        int n = 0;
+        int i = 0;
+        while (i < WIN_COUNT) {
+            if (wOpen[i] == 1) n = n + 1;
+            i = i + 1;
+        }
+        return n;
+    }
+
+    // Only reached when every window is shut, so there is nothing else the
+    // keyboard could belong to.
+    static void desktopKey(int code) {
+        if (code == K_DOWN || code == K_RIGHT) {
+            if (iconSel < WIN_COUNT - 1) iconSel = iconSel + 1;
+            return;
+        }
+        if (code == K_UP || code == K_LEFT) {
+            if (iconSel > 0) iconSel = iconSel - 1;
+            return;
+        }
+        if (code == K_ENTER || code == K_SPACE) openIcon(iconSel);
     }
 
     // ---- mouse pointer ---------------------------------------------------
@@ -1789,6 +2007,11 @@ public class Boot {
         if (fileMsg == 5) {
             g.setRGB(C_GREEN);
             g.drawString("Deleted.", x, y);
+            return;
+        }
+        if (fileMsg == 6) {
+            g.setRGB(C_RED);
+            g.drawString("The sandbox refused to start that program.", x, y);
             return;
         }
         g.setRGB(C_DARK);
